@@ -21,7 +21,7 @@ services:
       - csvdata:/data/csvs
       - pdfdata:/data/pdfs
       - kbdata:/data/knowledge_base
-    command: celery -A app.tasks.celery_app worker --loglevel=debug --concurrency=1
+    command: celery -A app.core.celery_app worker --loglevel=debug --concurrency=1
 
   frontend:
     ports:
@@ -33,7 +33,7 @@ services:
 
   db:
     ports:
-      - "5432:5432"             # acceso directo desde Mac para inspección
+      - "5433:5432"             # 5433 en Mac → 5432 en container (evita conflicto con postgres local)
 
   redis:
     ports:

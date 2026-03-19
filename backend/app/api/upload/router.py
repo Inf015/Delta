@@ -15,6 +15,7 @@ from app.core.deps import get_db
 from app.models.session import SessionType, Simulator, SourceType, TelemetrySession
 from app.schemas.session import SessionOut
 from app.services.parsers.csv_parser import is_valid_lap, parse_csv
+from app.tasks.process_session import process_session
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
@@ -116,6 +117,9 @@ async def upload_csv(
     db.add(session_record)
     db.commit()
     db.refresh(session_record)
+
+    # Disparar tarea de procesamiento en background (PDF + pre-análisis)
+    process_session.delay(str(session_record.id))
 
     return SessionOut(
         session_id=session_record.id,
