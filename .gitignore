@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.json
+!package.json
+!package-lock.json
+
+# Node
+node_modules/
+.next/
+out/
+
+# Docker volumes
+pgdata/
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# PDFs generados
+*.pdf
+
+# OAuth tokens
+oauth_token.json
+credentials.json
