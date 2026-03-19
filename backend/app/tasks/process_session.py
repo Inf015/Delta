@@ -1,13 +1,15 @@
 """
 Tarea Celery: procesa una TelemetrySession después del upload.
 
-Flujo:
+Flujo completo:
   1. Leer TelemetrySession de BD
   2. Parsear CSV del disco
   3. Generar PDF (11 secciones)
   4. Calcular pre-análisis (sin IA)
-  5. Crear/actualizar registro Analysis(status=done)
-  6. Marcar session.processed = True
+  5. Buscar/crear KnowledgeProfile y actualizarlo
+  6. Llamar Claude Haiku con pre-análisis + perfil histórico
+  7. Guardar ai_result + Recommendations en BD
+  8. Marcar Analysis(status=done) + session.processed=True
 """
 
 from __future__ import annotations
@@ -20,8 +22,11 @@ from celery.utils.log import get_task_logger
 from app.core.celery_app import celery_app
 from app.core.db import SessionLocal
 from app.models.analysis import Analysis, AnalysisStatus
+from app.models.knowledge import Recommendation
 from app.models.session import TelemetrySession
 from app.services.analysis import pre_analysis as pre
+from app.services.ai import claude_client
+from app.services.knowledge import kb_service
 from app.services.parsers.csv_parser import parse_csv
 from app.services.reports.pdf_generator import generate_pdf
 
@@ -35,28 +40,33 @@ logger = get_task_logger(__name__)
     name="app.tasks.process_session.process_session",
 )
 def process_session(self, session_id: str) -> dict:
-    """
-    Procesa una sesión: parsea → PDF → pre-análisis → guarda en BD.
-    Retorna un dict con el resultado para el backend de Celery.
-    """
+    """Procesa una sesión de punta a punta."""
     db = SessionLocal()
     sid = uuid.UUID(session_id)
 
-    # ── Buscar sesión ─────────────────────────────────────────────────────────
     session: TelemetrySession | None = db.get(TelemetrySession, sid)
     if session is None:
         db.close()
         raise ValueError(f"Session {session_id} not found")
 
-    # ── Crear registro Analysis en estado processing ───────────────────────────
-    analysis = Analysis(
-        session_id=sid,
-        user_id=session.user_id,
-        status=AnalysisStatus.processing,
-    )
-    db.add(analysis)
-    db.commit()
-    db.refresh(analysis)
+    # Cargar relación user antes de cerrar la sesión ORM
+    pilot_name = session.user.name if session.user and session.user.name else "Piloto"
+
+    # Buscar Analysis existente (puede ser un retry) o crear uno nuevo
+    analysis = db.query(Analysis).filter_by(session_id=sid).first()
+    if analysis is None:
+        analysis = Analysis(
+            session_id=sid,
+            user_id=session.user_id,
+            status=AnalysisStatus.processing,
+        )
+        db.add(analysis)
+        db.commit()
+        db.refresh(analysis)
+    else:
+        analysis.status = AnalysisStatus.processing
+        analysis.error_message = None
+        db.commit()
 
     try:
         # ── 1. Parsear CSV ────────────────────────────────────────────────────
@@ -66,24 +76,50 @@ def process_session(self, session_id: str) -> dict:
 
         # ── 2. Generar PDF ────────────────────────────────────────────────────
         logger.info("Generando PDF para sesión %s", session_id)
-        pilot_name = session.user.name if session.user and session.user.name else "Piloto"
         pdf_path = generate_pdf(parsed, pilot_name=pilot_name)
-
-        # Guardar ruta en sesión
-        session.pdf_path = pdf_path
+        session.pdf_path  = pdf_path
         session.processed = True
 
         # ── 3. Pre-análisis ───────────────────────────────────────────────────
-        logger.info("Calculando pre-análisis para sesión %s", session_id)
+        logger.info("Pre-análisis para sesión %s", session_id)
         pre_result = pre.compute(parsed)
-
-        # ── 4. Actualizar Analysis ────────────────────────────────────────────
         analysis.pre_analysis = pre_result
-        analysis.status = AnalysisStatus.done
-        analysis.completed_at = datetime.now(timezone.utc)
+
+        # ── 4. Knowledge Base — actualizar perfil (0 tokens) ──────────────────
+        profile = kb_service.get_or_create_profile(db, session.user_id, session)
+        kb_service.update_profile(db, profile, session, pre_result)
+
+        # Commit parcial: PDF + pre-análisis + KB quedan guardados aunque Claude falle
+        analysis.status = AnalysisStatus.processing
+        db.commit()
+
+        # ── 5. Análisis con Claude ────────────────────────────────────────────
+        logger.info("Llamando Claude para sesión %s", session_id)
+        ai_result, tok_in, tok_out = claude_client.analyze(pre_result, profile)
+
+        analysis.ai_result     = ai_result
+        analysis.tokens_input  = tok_in
+        analysis.tokens_output = tok_out
+        analysis.status        = AnalysisStatus.done
+        analysis.completed_at  = datetime.now(timezone.utc)
+
+        # ── 6. Guardar Recommendations ────────────────────────────────────────
+        for rec_data in ai_result.get("recommendations", []):
+            text = rec_data.get("text", "")
+            if not text:
+                continue
+            db.add(Recommendation(
+                analysis_id=analysis.id,
+                profile_id=profile.id,
+                text=text,
+                zone=rec_data.get("zone"),
+            ))
 
         db.commit()
-        logger.info("Sesión %s procesada OK — PDF: %s", session_id, pdf_path)
+        logger.info(
+            "Sesión %s OK — tokens: %d/%d — PDF: %s",
+            session_id, tok_in, tok_out, pdf_path,
+        )
 
         return {
             "session_id":  session_id,
@@ -91,11 +127,12 @@ def process_session(self, session_id: str) -> dict:
             "weak_sector": pre_result.get("weak_sector"),
             "handling":    pre_result.get("handling"),
             "lap_time":    pre_result.get("lap_time"),
+            "tokens":      tok_in + tok_out,
         }
 
     except Exception as exc:
-        logger.error("Error procesando sesión %s: %s", session_id, exc)
-        analysis.status = AnalysisStatus.failed
+        logger.error("Error en sesión %s: %s", session_id, exc)
+        analysis.status        = AnalysisStatus.failed
         analysis.error_message = str(exc)
         db.commit()
         raise self.retry(exc=exc)
