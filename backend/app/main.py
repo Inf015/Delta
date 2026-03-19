@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.api.upload.router import router as upload_router
 
 app = FastAPI(
     title="SimTelemetry Pro",
@@ -16,6 +17,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(upload_router, prefix="/api/v1")
 
 
 @app.get("/health")
