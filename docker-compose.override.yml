@@ -1,0 +1,44 @@
+# Override para desarrollo en Mac — NO subir al servidor
+# Este archivo se aplica automáticamente sobre docker-compose.yml
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app          # hot reload: monta el código fuente
+      - csvdata:/data/csvs
+      - pdfdata:/data/pdfs
+      - kbdata:/data/knowledge_base
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    volumes:
+      - ./backend:/app          # mismo código que api
+      - csvdata:/data/csvs
+      - pdfdata:/data/pdfs
+      - kbdata:/data/knowledge_base
+    command: celery -A app.tasks.celery_app worker --loglevel=debug --concurrency=1
+
+  frontend:
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules       # evita sobreescribir node_modules del container
+      - /app/.next
+
+  db:
+    ports:
+      - "5432:5432"             # acceso directo desde Mac para inspección
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  nginx:
+    profiles:
+      - prod                    # nginx solo se levanta con --profile prod
