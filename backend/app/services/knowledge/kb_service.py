@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app.models.knowledge import KnowledgeProfile
+from app.models.knowledge import KnowledgeProfile, Recommendation
 from app.models.session import TelemetrySession
 
 
@@ -115,3 +116,51 @@ def update_profile(
 
     db.flush()
     return profile
+
+
+def update_after_ai(
+    db: Session,
+    profile: KnowledgeProfile,
+    ai_result: dict,
+    current_lap_time: float,
+) -> None:
+    """
+    Llamar DESPUÉS de Claude. Hace dos cosas:
+    1. Marca las recomendaciones anteriores como testeadas y calcula su delta.
+    2. Actualiza recurring_issues con los problemas que Claude detectó ahora.
+    """
+    # ── 1. Cerrar ciclo de recomendaciones anteriores ─────────────────────────
+    prev_recs = (
+        db.query(Recommendation)
+        .filter_by(profile_id=profile.id, tested=False)
+        .order_by(desc(Recommendation.created_at))
+        .limit(5)
+        .all()
+    )
+    if prev_recs and profile.avg_lap > 0:
+        # delta positivo = mejoraste (lap_time bajó respecto al avg del perfil)
+        delta = round(profile.avg_lap - current_lap_time, 3)
+        for rec in prev_recs:
+            rec.tested = True
+            rec.delta_improvement = delta
+        db.flush()
+
+    # ── 2. Rastrear problemas recurrentes ─────────────────────────────────────
+    issues = ai_result.get("issues", [])
+    if not issues:
+        return
+
+    recurring: dict = dict(profile.recurring_issues or {})
+    for issue in issues:
+        area = (issue.get("area") or "").strip().lower()
+        if not area:
+            continue
+        entry = recurring.get(area, {"count": 0, "confirmed": False, "last_lap_time": 0.0})
+        entry["count"] += 1
+        entry["last_lap_time"] = current_lap_time
+        if entry["count"] >= 3:
+            entry["confirmed"] = True
+        recurring[area] = entry
+
+    profile.recurring_issues = recurring
+    db.flush()

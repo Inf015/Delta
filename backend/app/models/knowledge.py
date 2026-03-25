@@ -40,6 +40,10 @@ class KnowledgeProfile(Base):
     # Setup más usado (JSON con los campos que el sim exporta)
     common_setup: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Problemas recurrentes detectados por Claude
+    # {area: {count, confirmed, last_seen_lap_time}}
+    recurring_issues: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc)

@@ -17,5 +17,6 @@ class SessionOut(BaseModel):
     session_type: str
     lap_number: int
     valid: bool
+    racing_session_id: uuid.UUID | None = None
 
     model_config = {"from_attributes": True}

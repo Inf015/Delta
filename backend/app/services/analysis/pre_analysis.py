@@ -273,4 +273,146 @@ def compute(lap: ParsedLap) -> dict:
         if braking_zones:
             result["braking_zones"] = braking_zones
 
+    # ── Detección de incidentes ────────────────────────────────────────────────
+    incidents = _detect_incidents(df, spd_s, g_lat, g_lon, g_vert, dist_col)
+    if incidents:
+        result["incidents"] = incidents
+
     return result
+
+
+def _detect_incidents(
+    df: pd.DataFrame,
+    spd_s: pd.Series | None,
+    g_lat: pd.Series | None,
+    g_lon: pd.Series | None,
+    g_vert: pd.Series | None,
+    dist_col: str | None,
+) -> list[dict]:
+    """
+    Detecta incidentes de pilotaje: salidas de pista, accidentes, trompos,
+    impactos y kerbs severos.
+    """
+    n = len(df)
+    if n < 20:
+        return []
+
+    incidents: list[dict] = []
+
+    def get_dist(i: int) -> float | None:
+        if dist_col and i < n:
+            try:
+                return round(float(df[dist_col].iloc[i]), 0)
+            except Exception:
+                pass
+        return None
+
+    # 1. Caída brusca de velocidad sin frenada → salida o accidente
+    if spd_s is not None:
+        spd_arr = spd_s.reindex(df.index).fillna(0).values
+        brk_arr: np.ndarray | None = None
+        if "brake" in df.columns:
+            brk_arr = pd.to_numeric(df["brake"], errors="coerce").fillna(0).values
+
+        window = min(25, n // 4)  # ~0.5 s a 50 Hz
+        in_event = False
+        for i in range(window, n - 5):
+            drop = float(spd_arr[i - window]) - float(spd_arr[i])
+            if drop > 40 and not in_event:
+                avg_brake = float(brk_arr[i - window:i].mean()) if brk_arr is not None else 100.0
+                if avg_brake < 25:
+                    in_event = True
+                    v_before = float(spd_arr[i - window])
+                    v_now = float(spd_arr[i])
+                    incidents.append({
+                        "type": "off_track_or_crash",
+                        "dist_m": get_dist(i),
+                        "detail": f"Caída de velocidad {v_before:.0f}→{v_now:.0f} km/h sin frenada (freno {avg_brake:.0f}%)",
+                        "severity": "high" if drop > 80 else "medium",
+                    })
+            elif float(spd_arr[i]) > float(spd_arr[max(0, i - window)]) - 10:
+                in_event = False
+
+    # 2. Pico de G lateral >4 G → trompo o accidente
+    if g_lat is not None:
+        g_lat_arr = g_lat.reindex(df.index).fillna(0).values
+        in_event = False
+        for i in range(n):
+            val = abs(float(g_lat_arr[i]))
+            if val > 4.0 and not in_event:
+                in_event = True
+                incidents.append({
+                    "type": "spin_or_crash",
+                    "dist_m": get_dist(i),
+                    "detail": f"Fuerza lateral {val:.1f} G — posible trompo o impacto",
+                    "severity": "high",
+                })
+            elif val < 2.0:
+                in_event = False
+
+    # 3. Pico de G longitudinal >4.5 G → impacto frontal
+    if g_lon is not None:
+        g_lon_arr = g_lon.reindex(df.index).fillna(0).values
+        in_event = False
+        for i in range(n):
+            val = abs(float(g_lon_arr[i]))
+            if val > 4.5 and not in_event:
+                in_event = True
+                incidents.append({
+                    "type": "impact",
+                    "dist_m": get_dist(i),
+                    "detail": f"Impacto longitudinal {val:.1f} G",
+                    "severity": "high",
+                })
+            elif val < 2.0:
+                in_event = False
+
+    # 4. Slip simultáneo en las 4 ruedas >15 % → superficie fuera de pista
+    slip_cols = [f"slip_{c}" for c in ("fl", "fr", "rl", "rr")]
+    if all(c in df.columns for c in slip_cols):
+        slip_arrays = [
+            pd.to_numeric(df[c], errors="coerce").fillna(0).abs().values
+            for c in slip_cols
+        ]
+        in_event = False
+        for i in range(n):
+            vals = [float(s[i]) for s in slip_arrays]
+            if all(v > 15 for v in vals) and not in_event:
+                in_event = True
+                incidents.append({
+                    "type": "all_wheel_slip",
+                    "dist_m": get_dist(i),
+                    "detail": f"Slip 4 ruedas {min(vals):.0f}–{max(vals):.0f}% — posible suelo fuera de pista",
+                    "severity": "medium",
+                })
+            elif not all(v > 10 for v in vals):
+                in_event = False
+
+    # 5. Pico de G vertical >3 G → kerb severo o salto
+    if g_vert is not None:
+        g_vert_arr = g_vert.reindex(df.index).fillna(0).values
+        in_event = False
+        for i in range(n):
+            val = abs(float(g_vert_arr[i]))
+            if val > 3.0 and not in_event:
+                in_event = True
+                incidents.append({
+                    "type": "kerb_or_jump",
+                    "dist_m": get_dist(i),
+                    "detail": f"Impacto vertical {val:.1f} G — kerb severo o salto",
+                    "severity": "low" if val < 4.0 else "medium",
+                })
+            elif val < 1.5:
+                in_event = False
+
+    # Deduplicar: mantener solo uno cada 50 m
+    incidents.sort(key=lambda x: x.get("dist_m") or 0)
+    deduped: list[dict] = []
+    last_dist: float = -999.0
+    for inc in incidents:
+        d = float(inc.get("dist_m") or 0)
+        if d - last_dist > 50:
+            deduped.append(inc)
+            last_dist = d
+
+    return deduped[:10]

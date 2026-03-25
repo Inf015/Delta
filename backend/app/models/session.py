@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from sqlalchemy import String, Float, Boolean, Integer, DateTime, Enum as SAEnum, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
-
 from app.models.base import Base
 
 
@@ -65,6 +64,12 @@ class TelemetrySession(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
+    # Agrupación en sesión de carrera
+    racing_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("racing_sessions.id"), nullable=True, index=True
+    )
+
     user = relationship("User")
     analysis = relationship("Analysis", back_populates="session", uselist=False)
     pilot_notes = relationship("PilotNote", back_populates="session")
+    racing_session = relationship("RacingSession", back_populates="laps")

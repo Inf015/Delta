@@ -26,10 +26,13 @@ services:
   frontend:
     ports:
       - "3000:3000"
+    environment:
+      NODE_ENV: development
+      API_URL: http://api:8000                    # server-side (Docker network)
+      NEXT_PUBLIC_API_URL: http://localhost:8000  # client-side (browser)
     volumes:
       - ./frontend:/app
-      - /app/node_modules       # evita sobreescribir node_modules del container
-      - /app/.next
+    command: sh -c "npm install && npm run dev"
 
   db:
     ports:
@@ -39,6 +42,4 @@ services:
     ports:
       - "6379:6379"
 
-  nginx:
-    profiles:
-      - prod                    # nginx solo se levanta con --profile prod
+  # nginx solo en prod — ver docker-compose.yml profiles: [prod]

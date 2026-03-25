@@ -24,6 +24,7 @@ from app.core.db import SessionLocal
 from app.models.analysis import Analysis, AnalysisStatus
 from app.models.knowledge import Recommendation
 from app.models.session import TelemetrySession
+from sqlalchemy import desc
 from app.services.analysis import pre_analysis as pre
 from app.services.ai import claude_client
 from app.services.knowledge import kb_service
@@ -94,8 +95,17 @@ def process_session(self, session_id: str) -> dict:
         db.commit()
 
         # ── 5. Análisis con Claude ────────────────────────────────────────────
+        # Cargar recomendaciones previas testeadas para cerrar el ciclo
+        prev_recs = (
+            db.query(Recommendation)
+            .filter_by(profile_id=profile.id, tested=True)
+            .order_by(desc(Recommendation.created_at))
+            .limit(5)
+            .all()
+        )
+
         logger.info("Llamando Claude para sesión %s", session_id)
-        ai_result, tok_in, tok_out = claude_client.analyze(pre_result, profile)
+        ai_result, tok_in, tok_out = claude_client.analyze(pre_result, profile, prev_recs)
 
         analysis.ai_result     = ai_result
         analysis.tokens_input  = tok_in
@@ -103,7 +113,9 @@ def process_session(self, session_id: str) -> dict:
         analysis.status        = AnalysisStatus.done
         analysis.completed_at  = datetime.now(timezone.utc)
 
-        # ── 6. Guardar Recommendations ────────────────────────────────────────
+        # ── 6. Cerrar ciclo KB + guardar Recommendations ──────────────────────
+        kb_service.update_after_ai(db, profile, ai_result, session.lap_time)
+
         for rec_data in ai_result.get("recommendations", []):
             text = rec_data.get("text", "")
             if not text:

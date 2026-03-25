@@ -205,3 +205,51 @@ def generate_pdf(parsed_lap: ParsedLap, pilot_name: str = "Piloto") -> str:
         raise RuntimeError("El generador legacy no pudo crear el PDF")
 
     return result
+
+
+def generate_session_pdf(
+    csv_paths: list[str],
+    pilot_name: str,
+    track: str,
+    car: str,
+    session_type: str,
+    session_id: str,
+) -> str:
+    """
+    Genera el PDF de sesión completa (11 secciones) a partir de múltiples CSVs.
+    Cada CSV = una vuelta. El legacy genera el reporte con todas las vueltas.
+
+    Retorna la ruta absoluta del PDF generado.
+    """
+    from app.services.parsers.csv_parser import parse_csv
+
+    laps_data = []
+    for csv_path in csv_paths:
+        parsed = parse_csv(csv_path)
+        if parsed is not None:
+            laps_data.append(_parsed_lap_to_legacy_dict(parsed))
+
+    if not laps_data:
+        raise RuntimeError("No se pudo parsear ningún CSV de la sesión")
+
+    out_dir = Path(settings.pdf_data_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_track = track.replace(" ", "_").replace("/", "-")[:40]
+    safe_car = car.replace(" ", "_").replace("/", "-")[:30]
+    filename = f"session_{session_id}_{safe_track}_{safe_car}.pdf"
+    output_path = out_dir / filename
+
+    result = _legacy_generate_pdf(
+        laps_data=laps_data,
+        pilot_name=pilot_name,
+        pilot_id=0,
+        session_type=session_type,
+        session_num=1,
+        output_path=output_path,
+    )
+
+    if result is None:
+        raise RuntimeError("El generador legacy no pudo crear el PDF de sesión")
+
+    return result

@@ -1,23 +1,28 @@
 """
-POST /api/v1/upload/
-Recibe un CSV de telemetría, lo guarda en disco, lo parsea y crea un TelemetrySession.
+POST /api/v1/upload/preview   — parsea CSV y devuelve metadata sin guardar
+POST /api/v1/upload/          — sube 1+ CSVs a una RacingSession existente
+                                Auto-completa track/car/sim/fecha si la sesión está vacía
 """
 
 import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.deps import get_db
 from app.models.session import SessionType, Simulator, SourceType, TelemetrySession
+from app.models.racing_session import RacingSession
 from app.schemas.session import SessionOut
 from app.services.parsers.csv_parser import is_valid_lap, parse_csv
 from app.tasks.process_session import process_session
 
 router = APIRouter(prefix="/upload", tags=["upload"])
+
+PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 def _fmt(lap_time: float) -> str:
@@ -28,112 +33,232 @@ def _fmt(lap_time: float) -> str:
     return f"{m}:{s:06.3f}"
 
 
-@router.post("/", response_model=SessionOut, status_code=201)
-async def upload_csv(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-):
-    # ── Validar extensión ────────────────────────────────────────────────────
-    if not file.filename or not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Solo se aceptan archivos .csv")
+def _sim_enum(sim_str: str) -> tuple[Simulator, str]:
+    s = sim_str.upper()
+    if s.startswith("AC"):
+        return Simulator.ac, "ac"
+    if s.startswith("R3E"):
+        return Simulator.r3e, "r3e"
+    raise HTTPException(status_code=422, detail=f"Simulador no reconocido: {sim_str}")
 
-    # ── Parsear en memoria para detectar simulador antes de guardar ──────────
-    tmp_path = Path("/tmp") / f"{uuid.uuid4()}.csv"
+
+def _session_type(event: str) -> SessionType:
+    e = event.lower()
+    if "qualify" in e or "qual" in e:
+        return SessionType.qualify
+    if "race" in e:
+        return SessionType.race
+    return SessionType.practice
+
+
+async def _save_tmp(file: UploadFile) -> Path:
+    tmp = Path("/tmp") / f"{uuid.uuid4()}.csv"
     try:
-        with tmp_path.open("wb") as buf:
+        with tmp.open("wb") as buf:
             shutil.copyfileobj(file.file, buf)
     finally:
         await file.close()
+    return tmp
 
-    parsed = parse_csv(tmp_path)
+
+# ── Preview ──────────────────────────────────────────────────────────────────
+
+class PreviewOut(BaseModel):
+    track: str
+    car: str
+    simulator: str
+    session_date: str
+    session_type: str
+    lap_time: float
+    lap_time_fmt: str
+    s1: float
+    s2: float
+    s3: float
+    tyre_compound: str
+    track_length: float
+    lap_number: int
+
+
+@router.post("/preview", response_model=PreviewOut)
+async def preview_csv(file: UploadFile = File(...)):
+    """Parsea el CSV y devuelve su metadata sin persistir nada."""
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Solo se aceptan archivos .csv")
+
+    tmp = await _save_tmp(file)
+    parsed = parse_csv(tmp)
+    tmp.unlink(missing_ok=True)
 
     if parsed is None:
-        tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail="El archivo no es un CSV de telemetría válido")
+    if parsed.meta.lap_time < 5.0:
+        raise HTTPException(status_code=422, detail="Tiempo de vuelta inválido (<5s)")
 
-    if not is_valid_lap(parsed):
-        tmp_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=422,
-            detail="Vuelta inválida (pit lap, marcada como inválida o tiempo demasiado bajo)",
-        )
+    m = parsed.meta
+    st = _session_type(m.event)
+    sim_enum, _ = _sim_enum(m.simulator)
 
-    meta = parsed.meta
-
-    # ── Determinar simulador y directorio destino ────────────────────────────
-    sim_str = meta.simulator.upper()
-    if sim_str.startswith("AC"):
-        sim_enum = Simulator.ac
-        sub_dir = "ac"
-    elif sim_str.startswith("R3E"):
-        sim_enum = Simulator.r3e
-        sub_dir = "r3e"
-    else:
-        tmp_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail=f"Simulador no reconocido: {sim_str}")
-
-    # ── Guardar CSV en destino definitivo ────────────────────────────────────
-    dest_dir = Path(settings.csv_data_path) / sub_dir
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    safe_name = Path(file.filename).name
-    dest_path = dest_dir / f"{uuid.uuid4()}_{safe_name}"
-    shutil.move(str(tmp_path), dest_path)
-
-    # ── Mapear session_type ──────────────────────────────────────────────────
-    event_lower = meta.event.lower()
-    if "qualify" in event_lower or "qual" in event_lower:
-        session_type = SessionType.qualify
-    elif "race" in event_lower:
-        session_type = SessionType.race
-    else:
-        session_type = SessionType.practice
-
-    # ── Crear registro en BD ────────────────────────────────────────────────
-    # TODO PASO 7: user_id vendrá del token JWT. Por ahora placeholder.
-    PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-    session_record = TelemetrySession(
-        user_id=PLACEHOLDER_USER_ID,
-        simulator=sim_enum,
-        track=meta.track,
-        car=meta.car,
-        session_type=session_type,
-        lap_number=meta.lap_number,
-        lap_time=meta.lap_time,
-        s1=meta.s1,
-        s2=meta.s2,
-        s3=meta.s3,
-        tyre_compound=meta.tyre_compound,
-        track_temp=meta.track_temp,
-        ambient_temp=meta.ambient_temp,
-        track_length=meta.track_length,
-        valid=meta.valid,
-        source=SourceType.upload,
-        csv_path=str(dest_path),
-        session_date=meta.date,
+    return PreviewOut(
+        track=m.track,
+        car=m.car,
+        simulator=sim_enum.value,
+        session_date=m.date,
+        session_type=st.value,
+        lap_time=m.lap_time,
+        lap_time_fmt=_fmt(m.lap_time),
+        s1=m.s1,
+        s2=m.s2,
+        s3=m.s3,
+        tyre_compound=m.tyre_compound,
+        track_length=m.track_length,
+        lap_number=m.lap_number,
     )
 
-    db.add(session_record)
+
+# ── Upload vueltas a sesión existente ────────────────────────────────────────
+
+class UploadResult(BaseModel):
+    racing_session_id: uuid.UUID
+    laps_uploaded: int
+    laps_skipped: int
+    laps_duplicate: int
+    sessions: list[SessionOut]
+
+
+@router.post("/", response_model=UploadResult, status_code=201)
+async def upload_csv(
+    files: list[UploadFile] = File(...),
+    racing_session_id: uuid.UUID = Form(...),
+    db: Session = Depends(get_db),
+):
+    if not files:
+        raise HTTPException(status_code=400, detail="Se requiere al menos un archivo")
+
+    rs = db.query(RacingSession).filter_by(
+        id=racing_session_id, user_id=PLACEHOLDER_USER_ID
+    ).first()
+    if not rs:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    created_sessions: list[SessionOut] = []
+    skipped = 0
+    duplicates = 0
+    session_meta_filled = False  # solo auto-llenamos una vez
+
+    for file in files:
+        if not file.filename or not file.filename.lower().endswith(".csv"):
+            skipped += 1
+            continue
+
+        tmp = await _save_tmp(file)
+        parsed = parse_csv(tmp)
+
+        if parsed is None:
+            tmp.unlink(missing_ok=True)
+            skipped += 1
+            continue
+
+        # Solo rechazar si el tiempo es absurdo (<5s) — pit laps e inválidas se aceptan
+        if parsed.meta.lap_time < 5.0:
+            tmp.unlink(missing_ok=True)
+            skipped += 1
+            continue
+
+        # Deduplicación: misma sesión + mismo lap_time (redondeado a 3 decimales)
+        existing = db.query(TelemetrySession).filter_by(
+            racing_session_id=racing_session_id,
+            lap_number=parsed.meta.lap_number,
+        ).filter(
+            TelemetrySession.lap_time.between(
+                parsed.meta.lap_time - 0.001,
+                parsed.meta.lap_time + 0.001,
+            )
+        ).first()
+        if existing:
+            tmp.unlink(missing_ok=True)
+            duplicates += 1
+            continue
+
+        m = parsed.meta
+        sim_enum, sub_dir = _sim_enum(m.simulator)
+
+        # Auto-llenar sesión con datos del primer CSV válido
+        if not session_meta_filled and rs.track is None:
+            rs.track = m.track
+            rs.car = m.car
+            rs.simulator = sim_enum
+            rs.session_date = m.date
+            rs.session_type = _session_type(m.event)
+            db.flush()
+            session_meta_filled = True
+
+        dest_dir = Path(settings.csv_data_path) / sub_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = Path(file.filename).name
+        dest_path = dest_dir / f"{uuid.uuid4()}_{safe_name}"
+        shutil.move(str(tmp), dest_path)
+
+        lap = TelemetrySession(
+            user_id=PLACEHOLDER_USER_ID,
+            racing_session_id=rs.id,
+            simulator=sim_enum,
+            track=rs.track or m.track,
+            car=rs.car or m.car,
+            session_type=rs.session_type or _session_type(m.event),
+            lap_number=m.lap_number,
+            lap_time=m.lap_time,
+            s1=m.s1,
+            s2=m.s2,
+            s3=m.s3,
+            tyre_compound=m.tyre_compound,
+            track_temp=m.track_temp,
+            ambient_temp=m.ambient_temp,
+            track_length=m.track_length,
+            valid=m.valid,
+            source=SourceType.upload,
+            csv_path=str(dest_path),
+            session_date=rs.session_date or m.date,
+        )
+
+        db.add(lap)
+        db.flush()
+        db.refresh(lap)
+
+        # Invalidar caché del reporte al agregar nuevas vueltas
+        rs.report_cache = None
+
+        process_session.delay(str(lap.id))
+
+        created_sessions.append(SessionOut(
+            session_id=lap.id,
+            simulator=lap.simulator.value,
+            track=lap.track,
+            car=lap.car,
+            lap_time=lap.lap_time,
+            lap_time_fmt=_fmt(lap.lap_time),
+            s1=lap.s1,
+            s2=lap.s2,
+            s3=lap.s3,
+            tyre_compound=lap.tyre_compound,
+            track_length=lap.track_length,
+            session_type=lap.session_type.value,
+            lap_number=lap.lap_number,
+            valid=lap.valid,
+            racing_session_id=rs.id,
+        ))
+
     db.commit()
-    db.refresh(session_record)
 
-    # Disparar tarea de procesamiento en background (PDF + pre-análisis)
-    process_session.delay(str(session_record.id))
+    if not created_sessions and duplicates == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Ningún archivo era un CSV de telemetría válido",
+        )
 
-    return SessionOut(
-        session_id=session_record.id,
-        simulator=session_record.simulator.value,
-        track=session_record.track,
-        car=session_record.car,
-        lap_time=session_record.lap_time,
-        lap_time_fmt=_fmt(session_record.lap_time),
-        s1=session_record.s1,
-        s2=session_record.s2,
-        s3=session_record.s3,
-        tyre_compound=session_record.tyre_compound,
-        track_length=session_record.track_length,
-        session_type=session_record.session_type.value,
-        lap_number=session_record.lap_number,
-        valid=session_record.valid,
+    return UploadResult(
+        racing_session_id=rs.id,
+        laps_uploaded=len(created_sessions),
+        laps_skipped=skipped,
+        laps_duplicate=duplicates,
+        sessions=created_sessions,
     )
