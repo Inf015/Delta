@@ -26,10 +26,12 @@ from app.core.deps import get_db
 from app.models.racing_session import RacingSession
 from app.models.session import TelemetrySession
 from app.models.analysis import Analysis
+from app.models.track_info import TrackInfo
 from app.services.ai import claude_client
 from app.services.analysis import session_report as sr
 from app.services.parsers.setup_parser import parse_setup
-from app.services.reports.pdf_generator import generate_session_pdf
+from app.services.reports.pdf_report import generate_report_pdf
+from app.services.tracks import track_service
 
 router = APIRouter(prefix="/racing-sessions", tags=["racing-sessions"])
 
@@ -336,7 +338,18 @@ def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_d
         for lap in laps
     ]
 
-    report = sr.compute(laps_data, setup_data=rs.setup_data)
+    # ── Track info ────────────────────────────────────────────────────────────
+    track_id = rs.track
+    track_info_dict = None
+    if track_id:
+        best_lap_for_length = min(laps_data, key=lambda l: l["lap_time"])
+        track_length = (best_lap_for_length.get("pre_analysis") or {}).get("track_length")
+        try:
+            track_info_dict = track_service.get_track_info(db, track_id, track_length)
+        except Exception:
+            pass  # No bloquear el reporte si falla track info
+
+    report = sr.compute(laps_data, setup_data=rs.setup_data, track_info=track_info_dict)
 
     best_lap_data = min(laps_data, key=lambda l: l["lap_time"])
     best_pre = best_lap_data.get("pre_analysis") or {}
@@ -346,6 +359,7 @@ def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_d
         session_summary=summary_for_claude,
         best_lap_pre=best_pre,
         setup_data=rs.setup_data,
+        track_info=track_info_dict,
     )
     report.update(ai_sections)
 
@@ -372,47 +386,86 @@ def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_d
 @router.get("/{racing_session_id}/pdf")
 def download_session_pdf(racing_session_id: uuid.UUID, db: Session = Depends(get_db)):
     """
-    Genera y descarga el PDF de sesión completa (11 secciones, todas las vueltas).
-    Usa el generador legacy con todos los CSVs de la sesión.
+    Genera y descarga el PDF desde el reporte cacheado (mismo contenido que la web).
+    Si no hay caché, genera el reporte primero.
     """
     from pathlib import Path
+    from app.core.config import settings
 
     rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-    laps = (
-        db.query(TelemetrySession)
-        .filter_by(racing_session_id=racing_session_id)
-        .order_by(TelemetrySession.lap_number)
-        .all()
-    )
-    if not laps:
-        raise HTTPException(status_code=422, detail="La sesión no tiene vueltas")
+    # Usar caché si existe, sino generarlo en-línea
+    report = rs.report_cache
+    if not report:
+        laps = (
+            db.query(TelemetrySession)
+            .filter_by(racing_session_id=racing_session_id)
+            .order_by(TelemetrySession.lap_number)
+            .all()
+        )
+        if not laps:
+            raise HTTPException(status_code=422, detail="La sesión no tiene vueltas")
 
-    csv_paths = [lap.csv_path for lap in laps if lap.csv_path and Path(lap.csv_path).exists()]
-    if not csv_paths:
-        raise HTTPException(status_code=422, detail="No se encontraron archivos CSV en disco")
+        analysis_map: dict = {}
+        analyses = db.query(Analysis).filter(
+            Analysis.session_id.in_([l.id for l in laps])
+        ).all()
+        for a in analyses:
+            if a.session_id and a.pre_analysis:
+                analysis_map[a.session_id] = a.pre_analysis
+
+        laps_data = [
+            {"lap_number": lap.lap_number, "lap_time": lap.lap_time,
+             "s1": lap.s1, "s2": lap.s2, "s3": lap.s3, "valid": lap.valid,
+             "pre_analysis": analysis_map.get(lap.id)}
+            for lap in laps
+        ]
+        track_info_dict = None
+        if rs.track:
+            best_for_len = min(laps_data, key=lambda l: l["lap_time"])
+            track_length = (best_for_len.get("pre_analysis") or {}).get("track_length")
+            try:
+                track_info_dict = track_service.get_track_info(db, rs.track, track_length)
+            except Exception:
+                pass
+        report = sr.compute(laps_data, setup_data=rs.setup_data, track_info=track_info_dict)
+        best_pre = min(laps_data, key=lambda l: l["lap_time"]).get("pre_analysis") or {}
+        ai_sections, tok_in, tok_out = claude_client.analyze_session(
+            session_summary=report.get("section_1_summary", {}),
+            best_lap_pre=best_pre,
+            setup_data=rs.setup_data,
+            track_info=track_info_dict,
+        )
+        report.update(ai_sections)
+        report["meta"] = {
+            "racing_session_id": str(rs.id),
+            "name": rs.name, "track": rs.track, "car": rs.car,
+            "simulator": rs.simulator.value if rs.simulator else None,
+            "session_date": rs.session_date,
+            "session_type": rs.session_type.value if rs.session_type else None,
+            "pilot": "Oliver",
+            "tyre_compound": laps[0].tyre_compound if laps else None,
+            "tokens_used": tok_in + tok_out,
+        }
+        rs.report_cache = report
+        db.commit()
+
+    out_dir = Path(settings.pdf_data_path)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    track = (report.get("meta") or {}).get("track") or "session"
+    best_fmt = (report.get("section_1_summary") or {}).get("best_lap_fmt", "").replace(":", "-")
+    safe_track = track.replace(" ", "_").replace("/", "-")[:30]
+    pdf_path = out_dir / f"delta_{safe_track}_{best_fmt}.pdf"
 
     try:
-        pdf_path = generate_session_pdf(
-            csv_paths=csv_paths,
-            pilot_name=rs.user.name if rs.user and rs.user.name else "Piloto",
-            track=rs.track or laps[0].track,
-            car=rs.car or laps[0].car,
-            session_type=rs.session_type.value if rs.session_type else "Practice",
-            session_id=str(rs.id)[:8],
-        )
+        generate_report_pdf(report, pdf_path)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error generando PDF: {exc}")
 
-    safe_track = (rs.track or laps[0].track).replace(" ", "_")[:30]
-    best_time = min(laps, key=lambda l: l.lap_time).lap_time
-    m = int(best_time // 60)
-    s = best_time - m * 60
-    filename = f"delta_{safe_track}_{m}-{s:06.3f}.pdf"
-
-    return FileResponse(path=pdf_path, media_type="application/pdf", filename=filename)
+    filename = f"delta_{safe_track}_{best_fmt}.pdf"
+    return FileResponse(path=str(pdf_path), media_type="application/pdf", filename=filename)
 
 
 @router.post("/{racing_session_id}/setup", status_code=200)
@@ -450,6 +503,98 @@ async def upload_setup(
     db.commit()
 
     return {"ok": True, "sections": list(setup.keys())}
+
+
+_TRACK_MAP_DIR = Path("/data/track_maps")
+_ALLOWED_MAP_EXTS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
+_MAX_MAP_SIZE = 5 * 1024 * 1024  # 5MB
+
+
+@router.post("/{racing_session_id}/track-map", status_code=200)
+async def upload_track_map(
+    racing_session_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Sube el mapa del circuito (PNG/JPG/SVG) a una RacingSession.
+    El mapa se guarda en disco y se asocia al TrackInfo del circuito
+    (es reutilizable entre todas las sesiones del mismo circuito).
+    """
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    if not rs:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    if not rs.track:
+        raise HTTPException(status_code=422, detail="La sesión no tiene circuito asignado")
+
+    fname = file.filename or ""
+    ext = Path(fname).suffix.lower()
+    if ext not in _ALLOWED_MAP_EXTS:
+        raise HTTPException(status_code=400, detail=f"Formato no soportado. Usa: {', '.join(_ALLOWED_MAP_EXTS)}")
+
+    content = await file.read()
+    if len(content) > _MAX_MAP_SIZE:
+        raise HTTPException(status_code=400, detail="El archivo es demasiado grande (máx 5MB)")
+
+    from app.services.tracks.track_normalizer import normalize_track_id
+    normalized = normalize_track_id(rs.track)
+
+    _TRACK_MAP_DIR.mkdir(parents=True, exist_ok=True)
+    map_path = _TRACK_MAP_DIR / f"{normalized}{ext}"
+    map_path.write_bytes(content)
+
+    # Guardar en TrackInfo
+    ti = db.get(TrackInfo, normalized)
+    if ti is None:
+        ti = TrackInfo(track_id=normalized, source="unknown", display_name=rs.track)
+        db.add(ti)
+    ti.map_path = str(map_path)
+    db.commit()
+
+    # Invalidar caché del reporte (map_path ahora existe, cambia has_map)
+    rs.report_cache = None
+    db.commit()
+
+    return {"ok": True, "map_path": str(map_path), "track_id": normalized}
+
+
+@router.get("/{racing_session_id}/track-map")
+def get_track_map(racing_session_id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    Descarga el mapa del circuito asociado a la sesión.
+    """
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    if not rs:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    if not rs.track:
+        raise HTTPException(status_code=404, detail="Sin circuito asignado")
+
+    from app.services.tracks.track_normalizer import normalize_track_id
+    normalized = normalize_track_id(rs.track)
+
+    ti = db.get(TrackInfo, normalized)
+    if not ti or not ti.map_path:
+        raise HTTPException(status_code=404, detail="No hay mapa para este circuito")
+
+    map_file = Path(ti.map_path)
+    if not map_file.exists():
+        raise HTTPException(status_code=404, detail="Archivo de mapa no encontrado en disco")
+
+    ext = map_file.suffix.lower()
+    media_types = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".svg": "image/svg+xml",
+        ".webp": "image/webp",
+    }
+    return FileResponse(
+        path=str(map_file),
+        media_type=media_types.get(ext, "application/octet-stream"),
+        filename=map_file.name,
+    )
 
 
 @router.post("/compare")

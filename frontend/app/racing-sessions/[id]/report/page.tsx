@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { getSessionReport, sessionPdfUrl, SessionReport, LapRow } from '../../../lib/api'
+import { getSessionReport, sessionPdfUrl, SessionReport, LapRow, TrackInfo, trackMapUrl } from '../../../lib/api'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -550,6 +550,108 @@ function Section11({ s }: { s: NonNullable<SessionReport['section_11_engineer_di
   )
 }
 
+// ── Section 0: Circuito ───────────────────────────────────────────────────────
+
+function Section0({ track, sessionId }: { track: TrackInfo; sessionId: string }) {
+  const typeBadge = track.track_type === 'real'
+    ? 'bg-green-900 text-green-400 border-green-800'
+    : track.track_type === 'fictional'
+    ? 'bg-purple-900 text-purple-400 border-purple-800'
+    : 'bg-gray-800 text-gray-400 border-gray-700'
+  const typeLabel = track.track_type === 'real' ? 'REAL' : track.track_type === 'fictional' ? 'MOD / FICTICIO' : 'DESCONOCIDO'
+  const sourceBadge = track.source === 'static' ? '' : track.source === 'claude' ? ' · Generado por IA' : ''
+
+  return (
+    <div className="mb-8">
+      {/* Header del circuito */}
+      <div className="border border-gray-800 p-6 mb-4">
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div>
+            <h2 className="text-2xl font-bold text-white">{track.display_name}</h2>
+            <p className="text-gray-500 text-sm mt-1">
+              {track.country || 'País desconocido'}
+              {track.length_m ? ` · ${(track.length_m / 1000).toFixed(3)} km` : ''}
+              {track.turns ? ` · ${track.turns} curvas` : ''}
+              {sourceBadge}
+            </p>
+          </div>
+          <span className={`border px-3 py-1 text-xs font-bold shrink-0 ${typeBadge}`}>{typeLabel}</span>
+        </div>
+
+        {/* Tags de características */}
+        {track.characteristics.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            {track.characteristics.map((c, i) => (
+              <span key={i} className="bg-gray-900 border border-gray-700 text-gray-400 text-xs px-2 py-1">
+                {c}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Mapa del circuito */}
+        {track.has_map && (
+          <div className="mb-4 border border-gray-800 overflow-hidden">
+            <img
+              src={trackMapUrl(sessionId)}
+              alt={`Mapa de ${track.display_name}`}
+              className="w-full object-contain max-h-72"
+              style={{ filter: 'brightness(0.9)' }}
+            />
+          </div>
+        )}
+
+        {/* Récord oficial */}
+        {track.lap_record && (
+          <div className="border border-gray-800 px-4 py-3 mb-4 flex items-center gap-4">
+            <div>
+              <p className="text-gray-500 text-xs uppercase tracking-wide mb-0.5">Récord oficial</p>
+              <p className="text-white font-mono font-bold text-lg">{track.lap_record.time}</p>
+            </div>
+            <div className="text-gray-500 text-xs">
+              {track.lap_record.driver} · {track.lap_record.series} · {track.lap_record.year}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Sectores */}
+      {track.sectors.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          {track.sectors.map((sector, i) => {
+            const sColors = ['border-f1red/50 bg-red-950/10', 'border-blue-800/50 bg-blue-950/10', 'border-green-800/50 bg-green-950/10']
+            return (
+              <div key={i} className={`border p-4 ${sColors[i] ?? 'border-gray-800'}`}>
+                <p className="text-white text-sm">{sector}</p>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Curvas clave */}
+      {track.key_corners.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {track.key_corners.map((corner, i) => (
+            <div key={i} className="border border-gray-800 p-4">
+              <div className="flex items-baseline gap-2 mb-1">
+                <span className="text-white font-bold text-sm">{corner.name}</span>
+                <span className="text-gray-500 text-xs">{corner.type}</span>
+              </div>
+              <p className="text-gray-400 text-xs">{corner.tip}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Nota adicional */}
+      {track.notes && (
+        <p className="text-gray-500 text-xs italic border-l-2 border-gray-700 pl-3 mt-4">{track.notes}</p>
+      )}
+    </div>
+  )
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function SessionReportPage() {
@@ -637,6 +739,18 @@ export default function SessionReportPage() {
           </p>
         </div>
       </div>
+
+      {/* ── Section 0: Circuito ── */}
+      {report.section_0_track && (
+        <>
+          <div className="flex items-baseline gap-3 mb-4 mt-0">
+            <span className="text-f1red font-bold text-lg">0.</span>
+            <h2 className="text-white font-bold text-base uppercase tracking-wide">Información del Circuito</h2>
+          </div>
+          <div className="h-px bg-f1red/40 mb-4" />
+          <Section0 track={report.section_0_track} sessionId={id} />
+        </>
+      )}
 
       {/* ── Sections ── */}
       <SectionHeader num={1} title="Resumen de Sesión" />

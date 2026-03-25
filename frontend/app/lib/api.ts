@@ -123,6 +123,39 @@ export interface CSVPreview {
   lap_number: number
 }
 
+// ── Track Info types ──────────────────────────────────────────────────────────
+
+export interface KeyCorner {
+  name: string
+  type: string
+  tip: string
+}
+
+export interface LapRecord {
+  time: string
+  driver: string
+  year: number
+  series: string
+}
+
+export interface TrackInfo {
+  track_id: string
+  raw_track_id: string
+  display_name: string
+  country: string | null
+  track_type: 'real' | 'fictional' | 'unknown'
+  length_m: number | null
+  turns: number | null
+  characteristics: string[]
+  sectors: string[]
+  key_corners: KeyCorner[]
+  lap_record: LapRecord | null
+  notes: string | null
+  map_path: string | null
+  has_map: boolean
+  source: 'static' | 'claude' | 'unknown'
+}
+
 // ── Session Report types ─────────────────────────────────────────────────────
 
 export interface LapRow {
@@ -144,6 +177,7 @@ export interface LapRow {
 }
 
 export interface SessionReport {
+  section_0_track?: TrackInfo
   meta: {
     racing_session_id: string
     name: string | null
@@ -343,6 +377,21 @@ export async function uploadSetup(racingSessionId: string, file: File): Promise<
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al subir setup')
   }
   return res.json()
+}
+
+export async function uploadTrackMap(racingSessionId: string, file: File): Promise<{ ok: boolean; track_id: string }> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${API}/api/v1/racing-sessions/${racingSessionId}/track-map`, { method: 'POST', body: form })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al subir mapa')
+  }
+  return res.json()
+}
+
+export function trackMapUrl(racingSessionId: string): string {
+  return `${API}/api/v1/racing-sessions/${racingSessionId}/track-map`
 }
 
 export async function compareRacingSessions(aId: string, bId: string): Promise<ComparisonResult> {

@@ -171,6 +171,79 @@ def analyze(
     return result, tokens_in, tokens_out
 
 
+_TRACK_INFO_PROMPT = """\
+Necesito información sobre el circuito de sim racing con ID: "{track_id}".
+{length_hint}
+
+Si conoces este circuito (real o ficticio de mods conocidos de Assetto Corsa), proporciona su información.
+Si no lo conoces con certeza, indica que es ficticio y genera datos genéricos razonables.
+
+Devuelve SOLO este JSON (sin markdown):
+{{
+  "display_name": "Nombre completo del circuito",
+  "country": "País o región (null si es ficticio)",
+  "track_type": "real|fictional",
+  "length_m": 0,
+  "turns": 0,
+  "characteristics": ["característica 1", "característica 2"],
+  "sectors": [
+    "S1: descripción del primer sector",
+    "S2: descripción del segundo sector",
+    "S3: descripción del tercer sector"
+  ],
+  "key_corners": [
+    {{"name": "Nombre curva", "type": "tipo", "tip": "consejo para esta curva"}}
+  ],
+  "lap_record": null,
+  "notes": "Nota adicional sobre el circuito (null si no hay)"
+}}
+"""
+
+
+def get_track_info_from_claude(track_id: str, track_length_m: float | None = None) -> dict:
+    """
+    Obtiene información de un circuito usando Claude Haiku como fallback.
+    Usado para circuitos ficticios o mods no presentes en la base de datos estática.
+    """
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    length_hint = f"La longitud del circuito según la telemetría es aproximadamente {track_length_m:.0f}m." \
+        if track_length_m and track_length_m > 0 else ""
+
+    prompt = _TRACK_INFO_PROMPT.format(track_id=track_id, length_hint=length_hint)
+
+    message = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=800,
+        system="Eres un experto en circuitos de automovilismo y sim racing. Responde siempre con JSON válido.",
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = message.content[0].text.strip()
+    if "```" in raw:
+        lines = raw.split("\n")
+        raw = "\n".join(l for l in lines if not l.strip().startswith("```")).strip()
+
+    try:
+        result = json.loads(repair_json(raw))
+    except Exception as e:
+        logging.getLogger(__name__).error("Claude track info JSON error: %s", e)
+        result = {
+            "display_name": track_id.replace("_", " ").title(),
+            "country": None,
+            "track_type": "fictional",
+            "length_m": track_length_m,
+            "turns": None,
+            "characteristics": [],
+            "sectors": [],
+            "key_corners": [],
+            "lap_record": None,
+            "notes": None,
+        }
+
+    return result
+
+
 _SESSION_PROMPT = """\
 Eres un ingeniero de pista analizando UNA SESIÓN COMPLETA de sim racing (múltiples vueltas).
 
@@ -224,6 +297,7 @@ def analyze_session(
     session_summary: dict,
     best_lap_pre: dict,
     setup_data: dict | None = None,
+    track_info: dict | None = None,
 ) -> tuple[dict, int, int]:
     """
     Llama Claude Haiku con el resumen de sesión completa y el pre-análisis de la mejor vuelta.
@@ -241,6 +315,28 @@ def analyze_session(
     }
     compact_pre = {k: v for k, v in best_lap_pre.items() if k not in ("track", "car", "simulator")}
 
+    # Bloque de contexto del circuito
+    track_block = ""
+    if track_info and track_info.get("display_name"):
+        parts = [f"\nINFORMACIÓN DEL CIRCUITO: {track_info['display_name']}"]
+        if track_info.get("country"):
+            parts[0] += f" ({track_info['country']})"
+        if track_info.get("length_m"):
+            parts.append(f"Longitud: {track_info['length_m']:.0f}m | Curvas: {track_info.get('turns') or '?'}")
+        if track_info.get("characteristics"):
+            parts.append(f"Características: {', '.join(track_info['characteristics'])}")
+        if track_info.get("sectors"):
+            parts.append("Sectores:")
+            for s in track_info["sectors"]:
+                parts.append(f"  • {s}")
+        if track_info.get("key_corners"):
+            parts.append("Curvas clave:")
+            for c in track_info["key_corners"]:
+                parts.append(f"  • {c['name']} ({c.get('type','')}) — {c.get('tip','')}")
+        if track_info.get("notes"):
+            parts.append(f"Nota: {track_info['notes']}")
+        track_block = "\n".join(parts)
+
     setup_block = ""
     if setup_data:
         setup_block = f"\n\nSETUP DEL PILOTO (archivo .ini):\n{json.dumps(setup_data, ensure_ascii=False, indent=2)}"
@@ -248,7 +344,7 @@ def analyze_session(
     prompt = _SESSION_PROMPT.format(
         session_data=json.dumps(compact_summary, ensure_ascii=False, indent=2),
         best_lap_pre=json.dumps(compact_pre, ensure_ascii=False, indent=2),
-    ) + setup_block
+    ) + track_block + setup_block
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",

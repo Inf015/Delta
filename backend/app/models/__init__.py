@@ -5,3 +5,4 @@ from app.models.racing_session import RacingSession  # noqa: F401
 from app.models.analysis import Analysis, AnalysisStatus  # noqa: F401
 from app.models.knowledge import KnowledgeProfile, Recommendation, PilotNote  # noqa: F401
 from app.models.subscription import Subscription, SubStatus  # noqa: F401
+from app.models.track_info import TrackInfo  # noqa: F401

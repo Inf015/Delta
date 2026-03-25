@@ -42,7 +42,7 @@ def _best_f1_sectors(laps: list[dict]) -> dict:
     return {"s1": s1_best, "s2": s2_best, "s3": s3_best}
 
 
-def compute(laps: list[dict], setup_data: dict | None = None) -> dict:
+def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict | None = None) -> dict:
     """
     laps: lista de dicts con:
       lap_number, lap_time, s1, s2, s3, valid, pre_analysis (dict | None)
@@ -282,7 +282,7 @@ def compute(laps: list[dict], setup_data: dict | None = None) -> dict:
         setup_section["has_setup_data"] = False
         setup_section["note"] = "No se subió archivo de setup. Sube el .ini de AC para ver el setup completo."
 
-    return {
+    result: dict[str, Any] = {
         "section_1_summary":     summary,
         "section_2_lap_table":   lap_table,
         "section_3_consistency": consistency,
@@ -292,3 +292,8 @@ def compute(laps: list[dict], setup_data: dict | None = None) -> dict:
         "section_7_setup":       setup_section,
         # secciones 8-11 las añade el endpoint después de llamar Claude
     }
+
+    if track_info:
+        result["section_0_track"] = track_info
+
+    return result

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { getRacingSession } from '../../lib/api'
 import LapUploader from './LapUploader'
 import SetupUploader from './SetupUploader'
+import MapUploader from './MapUploader'
 
 interface Props {
   params: Promise<{ id: string }>
@@ -71,10 +72,11 @@ export default async function RacingSessionPage({ params }: Props) {
         </div>
       </div>
 
-      {/* Upload de vueltas y setup */}
-      <div className="grid grid-cols-2 gap-4 mb-2">
+      {/* Upload de vueltas, setup y mapa */}
+      <div className="grid grid-cols-3 gap-4 mb-2">
         <LapUploader racingSessionId={session.id} />
         <SetupUploader racingSessionId={session.id} hasSetup={!!session.setup_data} />
+        <MapUploader racingSessionId={session.id} hasMap={false} />
       </div>
 
       {/* Laps table */}
