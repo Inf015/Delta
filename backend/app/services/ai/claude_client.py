@@ -18,6 +18,11 @@ from app.core.config import settings
 from app.models.knowledge import KnowledgeProfile
 
 
+def _client() -> anthropic.Anthropic:
+    """Devuelve el cliente Anthropic con timeout global de 90s."""
+    return anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
+
+
 _SYSTEM = """\
 Eres un ingeniero de pista experto en sim racing. Analizas datos de telemetría \
 y das feedback técnico directo, específico y accionable al piloto.
@@ -157,7 +162,7 @@ def analyze(
 
     Retorna (ai_result_dict, tokens_input, tokens_output).
     """
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = _client()
 
     compact = {k: v for k, v in pre_analysis.items()
                if k not in ("track", "car", "simulator")}
@@ -261,7 +266,7 @@ def get_track_info_from_claude(track_id: str, track_length_m: float | None = Non
     Obtiene información de un circuito usando Claude Haiku como fallback.
     Usado para circuitos ficticios o mods no presentes en la base de datos estática.
     """
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = _client()
 
     length_hint = f"La longitud del circuito según la telemetría es aproximadamente {track_length_m:.0f}m." \
         if track_length_m and track_length_m > 0 else ""
@@ -365,7 +370,7 @@ def analyze_session(
 
     Retorna (ai_result_dict, tokens_input, tokens_output).
     """
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = _client()
 
     # Compactar para no desperdiciar tokens
     compact_summary = {
@@ -480,7 +485,7 @@ def compare(
 
     Retorna (ai_comparison_dict, tokens_input, tokens_output).
     """
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = _client()
 
     compact_a = {k: v for k, v in pre_a.items() if k not in ("track", "car", "simulator")}
     compact_b = {k: v for k, v in pre_b.items() if k not in ("track", "car", "simulator")}

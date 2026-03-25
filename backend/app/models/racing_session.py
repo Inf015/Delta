@@ -28,5 +28,5 @@ class RacingSession(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    laps = relationship("TelemetrySession", back_populates="racing_session")
+    laps = relationship("TelemetrySession", back_populates="racing_session", cascade="all, delete-orphan")
     user = relationship("User")

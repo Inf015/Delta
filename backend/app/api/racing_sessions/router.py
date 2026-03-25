@@ -48,6 +48,71 @@ def _fmt(seconds: float) -> str:
     return f"{m}:{s:06.3f}"
 
 
+def _generate_report(rs: RacingSession, db: Session) -> dict:
+    """Genera el reporte completo (secciones 0-11) para una RacingSession.
+    No guarda en caché — el caller es responsable de persistir rs.report_cache.
+    """
+    laps = (
+        db.query(TelemetrySession)
+        .filter_by(racing_session_id=rs.id)
+        .order_by(TelemetrySession.lap_number)
+        .all()
+    )
+    if not laps:
+        raise HTTPException(status_code=422, detail="La sesión no tiene vueltas cargadas")
+
+    analyses = db.query(Analysis).filter(
+        Analysis.session_id.in_([l.id for l in laps])
+    ).all()
+    analysis_map = {a.session_id: a.pre_analysis for a in analyses if a.session_id and a.pre_analysis}
+
+    laps_data = [
+        {
+            "lap_number": lap.lap_number,
+            "lap_time":   lap.lap_time,
+            "s1": lap.s1, "s2": lap.s2, "s3": lap.s3,
+            "valid": lap.valid,
+            "pre_analysis": analysis_map.get(lap.id),
+        }
+        for lap in laps
+    ]
+
+    track_info_dict = None
+    if rs.track:
+        best = min(laps_data, key=lambda l: l["lap_time"])
+        track_length = (best.get("pre_analysis") or {}).get("track_length")
+        try:
+            track_info_dict = track_service.get_track_info(db, rs.track, track_length)
+        except Exception:
+            pass
+
+    report = sr.compute(laps_data, setup_data=rs.setup_data, track_info=track_info_dict)
+    best_pre = min(laps_data, key=lambda l: l["lap_time"]).get("pre_analysis") or {}
+
+    ai_sections, tok_in, tok_out = claude_client.analyze_session(
+        session_summary=report.get("section_1_summary", {}),
+        best_lap_pre=best_pre,
+        setup_data=rs.setup_data,
+        track_info=track_info_dict,
+    )
+    report.update(ai_sections)
+
+    pilot_name = rs.user.name if rs.user and rs.user.name else "Piloto"
+    report["meta"] = {
+        "racing_session_id": str(rs.id),
+        "name": rs.name,
+        "track": rs.track,
+        "car": rs.car,
+        "simulator": rs.simulator.value if rs.simulator else None,
+        "session_date": rs.session_date,
+        "session_type": rs.session_type.value if rs.session_type else None,
+        "pilot": pilot_name,
+        "tyre_compound": laps[0].tyre_compound if laps else None,
+        "tokens_used": tok_in + tok_out,
+    }
+    return report
+
+
 # ── Schemas de respuesta ────────────────────────────────────────────────────
 
 class RacingSessionCreate(BaseModel):
@@ -304,83 +369,12 @@ def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_d
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-    # ── Caché hit ─────────────────────────────────────────────────────────────
     if rs.report_cache:
         return rs.report_cache
 
-    # ── Generar reporte ───────────────────────────────────────────────────────
-    laps = (
-        db.query(TelemetrySession)
-        .filter_by(racing_session_id=racing_session_id)
-        .order_by(TelemetrySession.lap_number)
-        .all()
-    )
-    if not laps:
-        raise HTTPException(status_code=422, detail="La sesión no tiene vueltas cargadas")
-
-    analysis_map: dict[uuid.UUID, dict] = {}
-    analyses = db.query(Analysis).filter(
-        Analysis.session_id.in_([l.id for l in laps])
-    ).all()
-    for a in analyses:
-        if a.session_id and a.pre_analysis:
-            analysis_map[a.session_id] = a.pre_analysis
-
-    laps_data = [
-        {
-            "lap_number": lap.lap_number,
-            "lap_time":   lap.lap_time,
-            "s1":         lap.s1,
-            "s2":         lap.s2,
-            "s3":         lap.s3,
-            "valid":      lap.valid,
-            "pre_analysis": analysis_map.get(lap.id),
-        }
-        for lap in laps
-    ]
-
-    # ── Track info ────────────────────────────────────────────────────────────
-    track_id = rs.track
-    track_info_dict = None
-    if track_id:
-        best_lap_for_length = min(laps_data, key=lambda l: l["lap_time"])
-        track_length = (best_lap_for_length.get("pre_analysis") or {}).get("track_length")
-        try:
-            track_info_dict = track_service.get_track_info(db, track_id, track_length)
-        except Exception:
-            pass  # No bloquear el reporte si falla track info
-
-    report = sr.compute(laps_data, setup_data=rs.setup_data, track_info=track_info_dict)
-
-    best_lap_data = min(laps_data, key=lambda l: l["lap_time"])
-    best_pre = best_lap_data.get("pre_analysis") or {}
-
-    summary_for_claude = report.get("section_1_summary", {})
-    ai_sections, tok_in, tok_out = claude_client.analyze_session(
-        session_summary=summary_for_claude,
-        best_lap_pre=best_pre,
-        setup_data=rs.setup_data,
-        track_info=track_info_dict,
-    )
-    report.update(ai_sections)
-
-    report["meta"] = {
-        "racing_session_id": str(rs.id),
-        "name": rs.name,
-        "track": rs.track,
-        "car": rs.car,
-        "simulator": rs.simulator.value if rs.simulator else None,
-        "session_date": rs.session_date,
-        "session_type": rs.session_type.value if rs.session_type else None,
-        "pilot": "Oliver",
-        "tyre_compound": laps[0].tyre_compound if laps else None,
-        "tokens_used": tok_in + tok_out,
-    }
-
-    # ── Guardar caché ─────────────────────────────────────────────────────────
+    report = _generate_report(rs, db)
     rs.report_cache = report
     db.commit()
-
     return report
 
 
@@ -397,59 +391,9 @@ def download_session_pdf(racing_session_id: uuid.UUID, db: Session = Depends(get
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-    # Usar caché si existe, sino generarlo en-línea
     report = rs.report_cache
     if not report:
-        laps = (
-            db.query(TelemetrySession)
-            .filter_by(racing_session_id=racing_session_id)
-            .order_by(TelemetrySession.lap_number)
-            .all()
-        )
-        if not laps:
-            raise HTTPException(status_code=422, detail="La sesión no tiene vueltas")
-
-        analysis_map: dict = {}
-        analyses = db.query(Analysis).filter(
-            Analysis.session_id.in_([l.id for l in laps])
-        ).all()
-        for a in analyses:
-            if a.session_id and a.pre_analysis:
-                analysis_map[a.session_id] = a.pre_analysis
-
-        laps_data = [
-            {"lap_number": lap.lap_number, "lap_time": lap.lap_time,
-             "s1": lap.s1, "s2": lap.s2, "s3": lap.s3, "valid": lap.valid,
-             "pre_analysis": analysis_map.get(lap.id)}
-            for lap in laps
-        ]
-        track_info_dict = None
-        if rs.track:
-            best_for_len = min(laps_data, key=lambda l: l["lap_time"])
-            track_length = (best_for_len.get("pre_analysis") or {}).get("track_length")
-            try:
-                track_info_dict = track_service.get_track_info(db, rs.track, track_length)
-            except Exception:
-                pass
-        report = sr.compute(laps_data, setup_data=rs.setup_data, track_info=track_info_dict)
-        best_pre = min(laps_data, key=lambda l: l["lap_time"]).get("pre_analysis") or {}
-        ai_sections, tok_in, tok_out = claude_client.analyze_session(
-            session_summary=report.get("section_1_summary", {}),
-            best_lap_pre=best_pre,
-            setup_data=rs.setup_data,
-            track_info=track_info_dict,
-        )
-        report.update(ai_sections)
-        report["meta"] = {
-            "racing_session_id": str(rs.id),
-            "name": rs.name, "track": rs.track, "car": rs.car,
-            "simulator": rs.simulator.value if rs.simulator else None,
-            "session_date": rs.session_date,
-            "session_type": rs.session_type.value if rs.session_type else None,
-            "pilot": "Oliver",
-            "tyre_compound": laps[0].tyre_compound if laps else None,
-            "tokens_used": tok_in + tok_out,
-        }
+        report = _generate_report(rs, db)
         rs.report_cache = report
         db.commit()
 
