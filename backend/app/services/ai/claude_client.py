@@ -30,25 +30,56 @@ Reglas:
 """
 
 _PROMPT_TEMPLATE = """\
-SESIÓN ACTUAL:
+VUELTA ACTUAL:
 {pre_analysis}
 
-HISTORIAL DEL PILOTO (pista+auto):
+{best_lap_block}HISTORIAL DEL PILOTO (pista+auto):
 {profile_summary}
 
-Analiza la sesión y devuelve exactamente este JSON:
+Analiza la vuelta y devuelve exactamente este JSON (sin markdown):
 {{
-  "summary": "2-3 frases resumiendo la sesión. Si hay problemas confirmados, menciónalos explícitamente.",
-  "strengths": ["punto fuerte 1", "punto fuerte 2"],
+  "summary": "2-3 frases resumiendo la vuelta. Menciona el contexto histórico (ej: top 20% de sus tiempos) y problemas confirmados si los hay.",
+  "lap_context": {{
+    "classification": "personal_best|top_20pct|average|below_average",
+    "interpretation": "Una frase situando esta vuelta en el historial del piloto."
+  }},
+  "sector_analysis": {{
+    "s1": {{
+      "assessment": "good|ok|weak",
+      "detail": "Qué pasó en S1 con dato concreto. Si hay comparación vs mejor vuelta, úsala."
+    }},
+    "s2": {{
+      "assessment": "good|ok|weak",
+      "detail": "Qué pasó en S2 con dato concreto."
+    }},
+    "s3": {{
+      "assessment": "good|ok|weak",
+      "detail": "Qué pasó en S3 con dato concreto."
+    }}
+  }},
+  "scores": {{
+    "frenadas": 0,
+    "traccion": 0,
+    "curvas_rapidas": 0,
+    "gestion_gomas": 0,
+    "consistencia": 0
+  }},
+  "strengths": ["punto fuerte con dato concreto"],
   "issues": [
-    {{"area": "nombre del área", "detail": "descripción técnica", "severity": "low|medium|high"}}
+    {{"area": "nombre del área", "detail": "descripción técnica con número", "severity": "low|medium|high"}}
   ],
   "recommendations": [
     {{"text": "recomendación accionable", "zone": "zona de pista o null", "expected_gain_s": 0.0}}
   ],
-  "setup_suggestions": ["sugerencia de setup 1"],
-  "next_session_focus": "Una frase: qué trabajar en la próxima sesión"
+  "setup_suggestions": ["sugerencia de setup con número concreto"],
+  "improvement_plan": [
+    {{"step": 1, "action": "Instrucción concreta y ejecutable", "zone": "zona específica", "expected_gain_s": 0.0}},
+    {{"step": 2, "action": "Instrucción concreta y ejecutable", "zone": "zona específica", "expected_gain_s": 0.0}},
+    {{"step": 3, "action": "Instrucción concreta y ejecutable", "zone": "zona específica", "expected_gain_s": 0.0}}
+  ]
 }}
+
+Reglas para los scores (0-10): 0-3=muy malo, 4-5=deficiente, 6-7=aceptable, 8-9=bueno, 10=perfecto. Basa cada score en los datos, no en intuición.
 """
 
 
@@ -117,10 +148,12 @@ def analyze(
     pre_analysis: dict,
     profile: KnowledgeProfile | None,
     prev_recs: list | None = None,
+    best_lap_pre: dict | None = None,
 ) -> tuple[dict, int, int]:
     """
     Llama Claude Haiku con el pre-análisis y el perfil del piloto.
     prev_recs: últimas recomendaciones (ya testeadas) para cerrar el ciclo.
+    best_lap_pre: pre_analysis de la mejor vuelta histórica para comparación directa.
 
     Retorna (ai_result_dict, tokens_input, tokens_output).
     """
@@ -129,14 +162,30 @@ def analyze(
     compact = {k: v for k, v in pre_analysis.items()
                if k not in ("track", "car", "simulator")}
 
+    # Bloque de comparación vs mejor vuelta
+    best_lap_block = ""
+    if best_lap_pre and best_lap_pre != pre_analysis:
+        compact_best = {k: v for k, v in best_lap_pre.items()
+                        if k not in ("track", "car", "simulator")}
+        delta_s1 = pre_analysis.get("s1", 0) - best_lap_pre.get("s1", 0)
+        delta_s2 = pre_analysis.get("s2", 0) - best_lap_pre.get("s2", 0)
+        delta_s3 = pre_analysis.get("s3", 0) - best_lap_pre.get("s3", 0)
+        delta_total = pre_analysis.get("lap_time", 0) - best_lap_pre.get("lap_time", 0)
+        best_lap_block = (
+            f"MEJOR VUELTA PERSONAL (comparación directa):\n"
+            f"  Delta total: {delta_total:+.3f}s  S1: {delta_s1:+.3f}s  S2: {delta_s2:+.3f}s  S3: {delta_s3:+.3f}s\n"
+            f"  Pre-análisis mejor vuelta: {json.dumps(compact_best, ensure_ascii=False)}\n\n"
+        )
+
     prompt = _PROMPT_TEMPLATE.format(
         pre_analysis=json.dumps(compact, ensure_ascii=False, indent=2),
+        best_lap_block=best_lap_block,
         profile_summary=_build_profile_summary(profile, prev_recs),
     )
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
+        max_tokens=2048,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -158,11 +207,18 @@ def analyze(
         logging.getLogger(__name__).error("Claude JSON irreparable: %s\nRaw: %.400s", e, raw)
         result = {
             "summary": raw[:300],
+            "lap_context": {"classification": "average", "interpretation": "Parse error"},
+            "sector_analysis": {
+                "s1": {"assessment": "ok", "detail": "Parse error"},
+                "s2": {"assessment": "ok", "detail": "Parse error"},
+                "s3": {"assessment": "ok", "detail": "Parse error"},
+            },
+            "scores": {"frenadas": 0, "traccion": 0, "curvas_rapidas": 0, "gestion_gomas": 0, "consistencia": 0},
             "strengths": [],
             "issues": [],
             "recommendations": [],
             "setup_suggestions": [],
-            "next_session_focus": "Parse error — ver logs",
+            "improvement_plan": [],
         }
 
     tokens_in  = message.usage.input_tokens

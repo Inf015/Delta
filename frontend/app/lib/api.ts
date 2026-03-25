@@ -28,10 +28,27 @@ export interface Analysis {
   pre_analysis: Record<string, unknown> | null
   ai_result: {
     summary?: string
+    lap_context?: {
+      classification: 'personal_best' | 'top_20pct' | 'average' | 'below_average'
+      interpretation: string
+    }
+    sector_analysis?: {
+      s1: { assessment: 'good' | 'ok' | 'weak'; detail: string }
+      s2: { assessment: 'good' | 'ok' | 'weak'; detail: string }
+      s3: { assessment: 'good' | 'ok' | 'weak'; detail: string }
+    }
+    scores?: {
+      frenadas: number
+      traccion: number
+      curvas_rapidas: number
+      gestion_gomas: number
+      consistencia: number
+    }
     strengths?: string[]
     issues?: Array<{ area: string; detail: string; severity: string }>
     recommendations?: Array<{ text: string; zone: string | null; expected_gain_s: number }>
     setup_suggestions?: string[]
+    improvement_plan?: Array<{ step: number; action: string; zone: string; expected_gain_s: number }>
     next_session_focus?: string
   } | null
   tokens_input: number

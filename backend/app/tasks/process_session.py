@@ -104,8 +104,29 @@ def process_session(self, session_id: str) -> dict:
             .all()
         )
 
+        # Buscar la mejor vuelta procesada de la misma racing_session para comparación
+        best_lap_pre: dict | None = None
+        if session.racing_session_id:
+            from app.models.analysis import Analysis as AnalysisModel
+            best_session = (
+                db.query(TelemetrySession)
+                .filter(
+                    TelemetrySession.racing_session_id == session.racing_session_id,
+                    TelemetrySession.processed == True,
+                    TelemetrySession.id != sid,
+                )
+                .order_by(TelemetrySession.lap_time)
+                .first()
+            )
+            if best_session:
+                best_analysis = db.query(AnalysisModel).filter_by(session_id=best_session.id).first()
+                if best_analysis and best_analysis.pre_analysis:
+                    best_lap_pre = best_analysis.pre_analysis
+
         logger.info("Llamando Claude para sesión %s", session_id)
-        ai_result, tok_in, tok_out = claude_client.analyze(pre_result, profile, prev_recs)
+        ai_result, tok_in, tok_out = claude_client.analyze(
+            pre_result, profile, prev_recs, best_lap_pre=best_lap_pre
+        )
 
         analysis.ai_result     = ai_result
         analysis.tokens_input  = tok_in
