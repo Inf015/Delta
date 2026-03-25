@@ -177,9 +177,9 @@ def compute(lap: ParsedLap) -> dict:
         fr = brake_temp.get("FR", {}).get("avg", 0)
         rl = brake_temp.get("RL", {}).get("avg", 0)
         rr = brake_temp.get("RR", {}).get("avg", 0)
-        if fl and rl:
-            f_avg = (fl + fr) / 2 if fr else fl
-            r_avg = (rl + rr) / 2 if rr else rl
+        if fl > 0 and rl > 0:
+            f_avg = (fl + fr) / 2 if fr > 0 else fl
+            r_avg = (rl + rr) / 2 if rr > 0 else rl
             result["brake_balance"] = {
                 "front_avg": round(f_avg, 0),
                 "rear_avg":  round(r_avg, 0),

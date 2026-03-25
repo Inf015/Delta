@@ -249,7 +249,12 @@ async def upload_csv(
 
     db.commit()
 
-    if not created_sessions and duplicates == 0:
+    if not created_sessions:
+        if duplicates > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Todas las vueltas ya existen en esta sesión ({duplicates} duplicadas).",
+            )
         raise HTTPException(
             status_code=422,
             detail="Ningún archivo era un CSV de telemetría válido",

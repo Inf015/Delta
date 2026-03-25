@@ -101,7 +101,7 @@ export default async function RacingSessionPage({ params }: Props) {
             </thead>
             <tbody>
               {session.laps.map((lap, i) => {
-                const isBest = bestTime !== null && lap.lap_time === bestTime
+                const isBest = bestTime !== null && Math.abs(lap.lap_time - bestTime) < 0.001
                 return (
                   <tr
                     key={lap.session_id}

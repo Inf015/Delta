@@ -50,7 +50,13 @@ export default function LapUploader({ racingSessionId }: { racingSessionId: stri
       setResult({ uploaded: res.laps_uploaded, skipped: res.laps_skipped, duplicate: res.laps_duplicate })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error'
-      pending.forEach(({ i }) => update(i, { status: 'error', error: msg }))
+      // 409 = todas duplicadas — marcar como done con aviso en lugar de error
+      if (msg.includes('duplicada')) {
+        pending.forEach(({ i }) => update(i, { status: 'done' }))
+        setResult({ uploaded: 0, skipped: 0, duplicate: pending.length })
+      } else {
+        pending.forEach(({ i }) => update(i, { status: 'error', error: msg }))
+      }
     }
     setLoading(false)
     router.refresh()

@@ -81,7 +81,15 @@ export default function NewRacingSession() {
       })
 
       if (files.length > 0) {
-        await uploadCSVs(files, rs.id)
+        try {
+          await uploadCSVs(files, rs.id)
+        } catch (uploadErr: unknown) {
+          // 409 = todas las vueltas ya existían — la sesión sigue siendo válida
+          const msg = uploadErr instanceof Error ? uploadErr.message : ''
+          if (!msg.includes('duplicada')) {
+            throw uploadErr
+          }
+        }
       }
 
       if (setupFile) {

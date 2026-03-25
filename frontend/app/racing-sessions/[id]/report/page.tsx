@@ -493,9 +493,9 @@ function Section10({ s }: { s: NonNullable<SessionReport['section_10_action_plan
         </div>
       ))}
       <div className="border-t border-gray-800 pt-4 space-y-1">
-        {s.target_lap_time > 0 && (
+        {(s.target_lap_time ?? 0) > 0 && (
           <p className="text-sm">
-            <span className="text-f1red">■</span> Meta de tiempo: <span className="text-green-400 font-mono font-bold">{s.target_lap_time_fmt || `${Math.floor(s.target_lap_time / 60)}:${(s.target_lap_time % 60).toFixed(3).padStart(6, '0')}`}</span>
+            <span className="text-f1red">■</span> Meta de tiempo: <span className="text-green-400 font-mono font-bold">{s.target_lap_time_fmt || '—'}</span>
           </p>
         )}
         {s.target_consistency_score > 0 && (
