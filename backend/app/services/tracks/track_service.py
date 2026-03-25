@@ -43,10 +43,14 @@ def get_track_info(
         # Upsert en BD para que map_path persista
         ti = db.get(TrackInfo, normalized)
         if ti is None:
+            static_mapped = {k: v for k, v in static.items() if k in _TRACK_FIELDS}
+            # static_db uses "type" key; model uses "track_type"
+            if "track_type" not in static_mapped and "type" in static:
+                static_mapped["track_type"] = static["type"]
             ti = TrackInfo(
                 track_id=normalized,
                 source="static",
-                **{k: v for k, v in static.items() if k in _TRACK_FIELDS},
+                **static_mapped,
             )
             db.add(ti)
             db.commit()
@@ -93,7 +97,7 @@ def _to_dict(ti: TrackInfo, static: dict | None, raw_track_id: str) -> dict:
         "raw_track_id": raw_track_id,
         "display_name": ti.display_name or base.get("display_name") or raw_track_id,
         "country": ti.country or base.get("country"),
-        "track_type": ti.track_type or base.get("type", "unknown"),
+        "track_type": (ti.track_type if ti.track_type and ti.track_type != "unknown" else None) or base.get("type", "unknown"),
         "length_m": ti.length_m or base.get("length_m"),
         "turns": ti.turns or base.get("turns"),
         "characteristics": ti.characteristics or base.get("characteristics", []),

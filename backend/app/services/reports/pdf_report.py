@@ -557,9 +557,10 @@ def _cover(report: dict, content_w: float) -> list:
             Paragraph(f"<b>{v}</b>", _style("cv", fontName="Helvetica-Bold", fontSize=9, textColor=C_TEXT)),
         ]
 
+    track_display = (report.get("section_0_track") or {}).get("display_name") or meta.get("track")
     meta_rows = [
         _row("PILOTO", _v(meta.get("pilot"))),
-        _row("CIRCUITO", _v(meta.get("track"))),
+        _row("CIRCUITO", _v(track_display)),
         _row("COCHE", _v(meta.get("car"))),
         _row("SIMULADOR", _v(meta.get("simulator"))),
         _row("FECHA", _v(meta.get("session_date"))),
@@ -851,7 +852,7 @@ def _section_3(report: dict, content_w: float) -> list:
     story.append(ScoreBar(score))
     story.append(Spacer(1, 12))
     story.append(Paragraph(interpretation, S_MUTED))
-    story.append(PageBreak())
+    story.append(Spacer(1, 12))
     return story
 
 
@@ -899,7 +900,7 @@ def _section_4(report: dict, content_w: float) -> list:
 
     if not s:
         story.append(Paragraph("Sin datos de gomas disponibles.", S_MUTED))
-        story.append(PageBreak())
+        story.append(Spacer(1, 8))
         return story
 
     # Temperatures
@@ -954,7 +955,7 @@ def _section_4(report: dict, content_w: float) -> list:
             rows.append([c, f"{cd.get('avg', 0):.3f}", f"{cd.get('max', 0):.3f}"])
         story.append(_card_table_style(rows, col_widths=col_w))
 
-    story.append(PageBreak())
+    story.append(Spacer(1, 12))
     return story
 
 
@@ -966,7 +967,7 @@ def _section_5(report: dict, content_w: float) -> list:
 
     if not s:
         story.append(Paragraph("Sin datos de frenos disponibles.", S_MUTED))
-        story.append(PageBreak())
+        story.append(Spacer(1, 8))
         return story
 
     # Brake temps
@@ -984,7 +985,8 @@ def _section_5(report: dict, content_w: float) -> list:
         story.append(Spacer(1, 6))
         bias_label = balance.get("bias", "")
         if bias_label:
-            story.append(Paragraph(f"Tendencia: <b>{bias_label}</b>", S_MUTED))
+            _bias_es = {"front_heavy": "Delantera dominante", "rear_heavy": "Trasera dominante", "balanced": "Equilibrada"}
+            story.append(Paragraph(f"Tendencia: <b>{_bias_es.get(bias_label, bias_label)}</b>", S_MUTED))
 
     # Warning
     warning = s.get("warning")
@@ -992,7 +994,7 @@ def _section_5(report: dict, content_w: float) -> list:
         story.append(Spacer(1, 8))
         story.append(Paragraph(f"AVISO: {warning}", _style("warn", textColor=C_ORANGE, fontName="Helvetica-Bold", fontSize=9)))
 
-    story.append(PageBreak())
+    story.append(Spacer(1, 12))
     return story
 
 
@@ -1004,7 +1006,7 @@ def _section_6(report: dict, content_w: float) -> list:
 
     if not s:
         story.append(Paragraph("Sin datos de dinámica disponibles.", S_MUTED))
-        story.append(PageBreak())
+        story.append(Spacer(1, 8))
         return story
 
     # G-forces table
@@ -1042,7 +1044,7 @@ def _section_6(report: dict, content_w: float) -> list:
             ])
         story.append(_card_table_style(rows, col_widths=col_w))
 
-    story.append(PageBreak())
+    story.append(Spacer(1, 12))
     return story
 
 
@@ -1057,7 +1059,7 @@ def _section_7(report: dict, content_w: float) -> list:
     if not has_setup:
         note = s.get("note") or "No hay datos de setup disponibles."
         story.append(Paragraph(note, S_MUTED))
-        story.append(PageBreak())
+        story.append(Spacer(1, 8))
         return story
 
     source = s.get("source", "")
@@ -1104,7 +1106,7 @@ def _section_7(report: dict, content_w: float) -> list:
                 story.append(_card_table_style(rows, col_widths=col_w))
             story.append(Spacer(1, 6))
 
-    story.append(PageBreak())
+    story.append(Spacer(1, 12))
     return story
 
 
@@ -1402,7 +1404,8 @@ def generate_report_pdf(report: dict, output_path: str | Path) -> str:
     # Section 7
     story.extend(_section_7(report, content_w))
 
-    # Section 8
+    # Section 8 — start fresh after the telemetry data sections
+    story.append(PageBreak())
     story.extend(_section_8(report, content_w))
 
     # Section 9
