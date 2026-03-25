@@ -369,6 +369,14 @@ export async function getRacingSessions(): Promise<RacingSession[]> {
   return res.json()
 }
 
+export async function deleteRacingSession(id: string): Promise<void> {
+  const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al eliminar sesión')
+  }
+}
+
 export async function getRacingSession(id: string): Promise<RacingSessionDetail | null> {
   const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, { cache: 'no-store' })
   if (!res.ok) return null

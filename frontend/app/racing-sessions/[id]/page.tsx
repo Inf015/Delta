@@ -4,6 +4,7 @@ import { getRacingSession } from '../../lib/api'
 import LapUploader from './LapUploader'
 import SetupUploader from './SetupUploader'
 import MapUploader from './MapUploader'
+import DeleteButton from './DeleteButton'
 
 interface Props {
   params: Promise<{ id: string }>
@@ -51,6 +52,7 @@ export default async function RacingSessionPage({ params }: Props) {
           >
             Comparar
           </Link>
+          <DeleteButton sessionId={session.id} />
         </div>
       </div>
 

@@ -286,6 +286,15 @@ def update_racing_session(
     return _rs_out(rs, lap_count=lap_count or 0, best_lap=best_lap)
 
 
+@router.delete("/{racing_session_id}", status_code=204)
+def delete_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(get_db)):
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    if not rs:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    db.delete(rs)  # cascade elimina TelemetrySessions por el modelo
+    db.commit()
+
+
 @router.get("/", response_model=list[RacingSessionOut])
 def list_racing_sessions(db: Session = Depends(get_db)):
     rows = (
