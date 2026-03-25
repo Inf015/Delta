@@ -9,6 +9,7 @@ GET   /api/v1/racing-sessions/{id}/report  Reporte completo 11 secciones
 POST  /api/v1/racing-sessions/compare   Comparación de dos sesiones
 """
 
+import logging
 import uuid
 from typing import Any
 
@@ -647,7 +648,7 @@ def compare_sessions(body: CompareRequest, db: Session = Depends(get_db)) -> dic
     meta_b = {"car": rs_b.car, "simulator": rs_b.simulator.value, "track": rs_b.track}
 
     # Llamar Claude para comparación
-    ai_comparison, _, _ = claude_client.compare(
+    ai_comparison, cmp_tok_in, cmp_tok_out = claude_client.compare(
         pre_a=pre_a or {},
         meta_a=meta_a,
         pre_b=pre_b or {},
@@ -656,6 +657,10 @@ def compare_sessions(body: CompareRequest, db: Session = Depends(get_db)) -> dic
         delta_s2=delta_s2,
         delta_s3=delta_s3,
         delta_total=delta_total,
+    )
+    logging.getLogger(__name__).info(
+        "Compare Claude call — %s vs %s — tokens: %d in / %d out",
+        aId, bId, cmp_tok_in, cmp_tok_out,
     )
 
     def _metrics(lap: TelemetrySession, pre: dict) -> dict:

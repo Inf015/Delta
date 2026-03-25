@@ -185,7 +185,7 @@ def analyze(
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=2048,
+        max_tokens=3072,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -297,6 +297,10 @@ def get_track_info_from_claude(track_id: str, track_length_m: float | None = Non
             "notes": None,
         }
 
+    logging.getLogger(__name__).info(
+        "Track info Claude call — track: %s — tokens: %d in / %d out",
+        track_id, message.usage.input_tokens, message.usage.output_tokens,
+    )
     return result
 
 
@@ -395,7 +399,10 @@ def analyze_session(
 
     setup_block = ""
     if setup_data:
-        setup_block = f"\n\nSETUP DEL PILOTO (archivo .ini):\n{json.dumps(setup_data, ensure_ascii=False, indent=2)}"
+        # Filtrar secciones relevantes — ignorar datos internos del simulador
+        _SETUP_SKIP = {"version", "__metadata__", "HEADER", "CAR"}
+        compact_setup = {k: v for k, v in setup_data.items() if k.upper() not in _SETUP_SKIP}
+        setup_block = f"\n\nSETUP DEL PILOTO:\n{json.dumps(compact_setup, ensure_ascii=False, separators=(',', ':'))}"
 
     prompt = _SESSION_PROMPT.format(
         session_data=json.dumps(compact_summary, ensure_ascii=False, indent=2),
