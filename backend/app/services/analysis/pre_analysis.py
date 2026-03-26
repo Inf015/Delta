@@ -149,7 +149,7 @@ def compute(lap: ParsedLap) -> dict:
     for corner in ("fl", "fr", "rl", "rr"):
         s = _series(df, f"tyre_press_{corner}")
         if s is not None:
-            hot = s[s > 1]
+            hot = s[s > 0]
             if not hot.empty:
                 tyre_press[corner.upper()] = {
                     "avg": round(float(hot.mean()), 1),
@@ -183,7 +183,7 @@ def compute(lap: ParsedLap) -> dict:
             result["brake_balance"] = {
                 "front_avg": round(f_avg, 0),
                 "rear_avg":  round(r_avg, 0),
-                "bias":      "front_heavy" if f_avg > r_avg * 1.35 else
+                "bias":      "front_heavy" if f_avg > r_avg * 1.30 else
                              "rear_heavy"  if r_avg > f_avg * 1.30 else "balanced",
             }
 
@@ -410,7 +410,11 @@ def _detect_incidents(
     deduped: list[dict] = []
     last_dist: float = -999.0
     for inc in incidents:
-        d = float(inc.get("dist_m") or 0)
+        dist = inc.get("dist_m")
+        if dist is None:
+            deduped.append(inc)
+            continue
+        d = float(dist)
         if d - last_dist > 50:
             deduped.append(inc)
             last_dist = d

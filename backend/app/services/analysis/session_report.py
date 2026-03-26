@@ -36,10 +36,15 @@ def _avg(values: list[float]) -> float | None:
 
 def _best_f1_sectors(laps: list[dict]) -> dict:
     """El mejor sector individual entre todas las vueltas (tiempo teórico óptimo F1-style)."""
-    s1_best = min((l["s1"] for l in laps if l.get("s1", 0) > 0), default=0)
-    s2_best = min((l["s2"] for l in laps if l.get("s2", 0) > 0), default=0)
-    s3_best = min((l["s3"] for l in laps if l.get("s3", 0) > 0), default=0)
-    return {"s1": s1_best, "s2": s2_best, "s3": s3_best}
+    s1_vals = [l["s1"] for l in laps if l.get("s1") and l["s1"] > 0]
+    s2_vals = [l["s2"] for l in laps if l.get("s2") and l["s2"] > 0]
+    s3_vals = [l["s3"] for l in laps if l.get("s3") and l["s3"] > 0]
+    return {
+        "s1": min(s1_vals) if s1_vals else 0,
+        "s2": min(s2_vals) if s2_vals else 0,
+        "s3": min(s3_vals) if s3_vals else 0,
+        "valid": bool(s1_vals and s2_vals and s3_vals),
+    }
 
 
 def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict | None = None) -> dict:
@@ -67,8 +72,12 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
     best_pre = best_lap.get("pre_analysis") or {}
 
     f1_sectors = _best_f1_sectors(laps)
-    theoretical_best = f1_sectors["s1"] + f1_sectors["s2"] + f1_sectors["s3"]
-    potential_gain = best_time - theoretical_best if theoretical_best > 0 else 0
+    if f1_sectors["valid"]:
+        theoretical_best = f1_sectors["s1"] + f1_sectors["s2"] + f1_sectors["s3"]
+        potential_gain = max(0.0, round(best_time - theoretical_best, 3))
+    else:
+        theoretical_best = 0
+        potential_gain = 0
 
     summary: dict[str, Any] = {
         "total_laps": len(laps),

@@ -157,7 +157,7 @@ _COL_ALIASES: dict[str, str] = {
     "tyrepressurefrontright [psi]": "tyre_press_fr",
     # Gomas — desgaste
     "tyrewearrearleft [%]": "tyre_wear_rl",
-    "tyreWearrearright [%]": "tyre_wear_rr",
+    "tyrewearrearright [%]": "tyre_wear_rr",
     "tyrewearfrontleft [%]": "tyre_wear_fl",
     "tyrewearfrontright [%]": "tyre_wear_fr",
     # Gomas — zona interna/media/externa
