@@ -69,6 +69,9 @@ def get_track_info(
         logger.warning("Claude track fallback failed for %s: %s", normalized, exc)
         info = _minimal_unknown(normalized)
 
+    # Claude devuelve "type" pero el modelo espera "track_type"
+    if "type" in info and "track_type" not in info:
+        info["track_type"] = info.pop("type")
     ti = TrackInfo(
         track_id=normalized,
         source="claude",
@@ -77,8 +80,9 @@ def get_track_info(
     db.add(ti)
     try:
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        logger.warning("No se pudo persistir track_info para %s: %s", normalized, exc)
 
     return _to_dict(ti, None, raw_track_id)
 

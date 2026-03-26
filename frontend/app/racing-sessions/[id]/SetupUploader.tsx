@@ -26,8 +26,8 @@ export default function SetupUploader({
     setError(null)
     try {
       await uploadSetup(racingSessionId, file)
-      setDone(true)
       router.refresh()
+      setDone(true)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Error al subir setup')
     }

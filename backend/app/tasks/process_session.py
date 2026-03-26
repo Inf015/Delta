@@ -134,6 +134,14 @@ def process_session(self, session_id: str) -> dict:
         analysis.status        = AnalysisStatus.done
         analysis.completed_at  = datetime.now(timezone.utc)
 
+        # Invalidar report_cache de la racing_session — puede haberse generado
+        # antes de que este análisis completara, dejando datos vacíos en gomas/frenos
+        if session.racing_session_id:
+            from app.models.racing_session import RacingSession
+            rs = db.get(RacingSession, session.racing_session_id)
+            if rs:
+                rs.report_cache = None
+
         # ── 6. Cerrar ciclo KB + guardar Recommendations ──────────────────────
         kb_service.update_after_ai(db, profile, ai_result, session.lap_time)
 

@@ -606,16 +606,6 @@ def _section_1(report: dict, content_w: float) -> list:
 
     half = (content_w - 6) / 2
 
-    # Row 1 — main lap stats
-    boxes_r1 = [
-        _metric_box("VUELTAS TOTALES", _v(s.get("total_laps"))),
-        _metric_box("VUELTAS VÁLIDAS", _v(s.get("valid_laps"))),
-        _metric_box("MEJOR VUELTA", _v(s.get("best_lap_fmt"), default="N/D"), C_GREEN),
-        _metric_box("PEOR VUELTA", _v(s.get("worst_lap_fmt"), default="N/D"), C_RED),
-        _metric_box("PROMEDIO", _v(s.get("avg_lap_fmt"), default="N/D")),
-        _metric_box("DESVIACIÓN STD", f"{_v(s.get('section_3_consistency', {}) and report.get('section_3_consistency', {}).get('std_dev'), '.3f', 'N/D')} s"),
-    ]
-
     def _pair_table(bxs: list) -> Table:
         rows = []
         it = iter(bxs)
@@ -636,7 +626,7 @@ def _section_1(report: dict, content_w: float) -> list:
         return t
 
     # std_dev from consistency section
-    std_dev = _v(report.get("section_3_consistency", {}) and report.get("section_3_consistency", {}).get("std_dev"), ".3f", "N/D")
+    std_dev = _v((report.get("section_3_consistency") or {}).get("std_dev"), ".3f", "N/D")
     boxes_r1 = [
         _metric_box("VUELTAS TOTALES", _v(s.get("total_laps"))),
         _metric_box("VUELTAS VÁLIDAS", _v(s.get("valid_laps"))),

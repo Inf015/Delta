@@ -241,8 +241,8 @@ function Section4({ s }: { s: SessionReport['section_4_tyres'] }) {
           <TwoColTable
             headers={['Métrica', 'FL', 'FR', 'RL', 'RR']}
             rows={[
-              ['Temp promedio (°C)', ...corners.map(c => ({ value: String(s.temp![c]?.avg ?? '—'), color: s.temp![c] ? tyreColor(s.temp![c].avg) : undefined }))],
-              ['Temp máx (°C)', ...corners.map(c => ({ value: String(s.temp![c]?.max ?? '—'), color: s.temp![c] ? tyreColor(s.temp![c].max) : undefined }))],
+              ['Temp promedio (°C)', ...corners.map(c => { const d = s.temp?.[c]; return { value: String(d?.avg ?? '—'), color: typeof d?.avg === 'number' ? tyreColor(d.avg) : undefined } })],
+              ['Temp máx (°C)', ...corners.map(c => { const d = s.temp?.[c]; return { value: String(d?.max ?? '—'), color: typeof d?.max === 'number' ? tyreColor(d.max) : undefined } })],
               ['Temp mín (°C)', ...corners.map(c => ({ value: String(s.temp![c]?.min ?? '—') }))],
               ...(s.press ? [
                 ['Presión promedio (PSI)', ...corners.map(c => ({ value: String(s.press![c]?.avg ?? '—') }))],
@@ -342,31 +342,49 @@ function Section6({ s }: { s: SessionReport['section_6_dynamics'] }) {
   )
 }
 
-function SetupBlock({ label, data }: { label: string; data: Record<string, unknown> }) {
+function CornerGrid({ data }: { data: Record<string, unknown> }) {
   const corners = ['LF', 'RF', 'LR', 'RR']
   const labels: Record<string, string> = { LF: 'Del Izq', RF: 'Del Der', LR: 'Tra Izq', RR: 'Tra Der' }
+  return (
+    <div className="grid grid-cols-4 gap-1 text-xs">
+      {corners.filter((c) => c in data).map((c) => (
+        <div key={c} className="border border-gray-800 px-2 py-1 text-center">
+          <p className="text-gray-600 text-xs">{labels[c]}</p>
+          <p className="text-white font-mono">{String(data[c])}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SetupBlock({ label, data }: { label: string; data: Record<string, unknown> }) {
+  const corners = ['LF', 'RF', 'LR', 'RR']
   const isCornerMap = corners.some((c) => c in data)
 
   return (
     <div>
       <p className="text-gray-500 text-xs uppercase tracking-wide mb-1 font-bold">{label}</p>
       {isCornerMap ? (
-        <div className="grid grid-cols-4 gap-1 text-xs">
-          {corners.filter((c) => c in data).map((c) => (
-            <div key={c} className="border border-gray-800 px-2 py-1 text-center">
-              <p className="text-gray-600 text-xs">{labels[c]}</p>
-              <p className="text-white font-mono">{String(data[c])}</p>
-            </div>
-          ))}
-        </div>
+        <CornerGrid data={data} />
       ) : (
         <div className="flex flex-wrap gap-2">
-          {Object.entries(data).map(([k, v]) => (
-            <span key={k} className="text-xs border border-gray-800 px-2 py-0.5">
-              <span className="text-gray-500">{k}: </span>
-              <span className="text-white font-mono">{String(v)}</span>
-            </span>
-          ))}
+          {Object.entries(data).map(([k, v]) => {
+            // valor anidado (ej: pressure_psi: {LF: 28.5, ...}) → renderizar como grid
+            if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+              return (
+                <div key={k} className="w-full">
+                  <p className="text-gray-600 text-xs mb-1">{k.replace(/_/g, ' ')}</p>
+                  <CornerGrid data={v as Record<string, unknown>} />
+                </div>
+              )
+            }
+            return (
+              <span key={k} className="text-xs border border-gray-800 px-2 py-0.5">
+                <span className="text-gray-500">{k}: </span>
+                <span className="text-white font-mono">{String(v)}</span>
+              </span>
+            )
+          })}
         </div>
       )}
     </div>
@@ -662,11 +680,16 @@ export default function SessionReportPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    getSessionReport(id).then((r) => {
-      if (r) setReport(r)
-      else setError('No se pudo cargar el reporte. ¿La sesión tiene vueltas procesadas?')
-      setLoading(false)
-    })
+    getSessionReport(id)
+      .then((r) => {
+        if (r) setReport(r)
+        else setError('No se pudo cargar el reporte. ¿La sesión tiene vueltas procesadas?')
+        setLoading(false)
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : 'Error de red al cargar el reporte.')
+        setLoading(false)
+      })
   }, [id])
 
   if (loading) {

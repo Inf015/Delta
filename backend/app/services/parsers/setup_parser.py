@@ -94,14 +94,14 @@ def parse_setup(path: str | Path) -> dict | None:
         tyres["pressure_psi"] = pressure
     compound = val("TYRES")
     if compound is not None:
-        tyres["compound"] = int(compound)
+        tyres["compound"] = round(compound)
     if tyres:
         setup["tyres"] = tyres
 
     # ── Frenos ────────────────────────────────────────────────────────────────
     front_bias = val("FRONT_BIAS")
     if front_bias is not None:
-        setup["brakes"] = {"front_bias_pct": int(front_bias)}
+        setup["brakes"] = {"front_bias_pct": round(front_bias, 1)}
 
     # ── Diferencial ───────────────────────────────────────────────────────────
     diff: dict = {k: v for k, v in {
@@ -138,4 +138,4 @@ def parse_setup(path: str | Path) -> dict | None:
     if final_ratio is not None:
         setup["final_ratio"] = final_ratio
 
-    return setup if len(setup) > 1 else None
+    return setup if setup else None
