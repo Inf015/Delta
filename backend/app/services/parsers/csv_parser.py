@@ -122,6 +122,7 @@ _COL_ALIASES: dict[str, str] = {
     "laptime [s]": "lap_time",
     "sector1time [s]": "s1_live",
     "sector2time [s]": "s2_live",
+    "sector3time [s]": "s3_live",
     "sector [int]": "sector",
     "speed [km/h]": "speed",
     "enginerevs [rpm]": "rpm",
@@ -179,7 +180,7 @@ _COL_ALIASES: dict[str, str] = {
     "braketemperaturefrontleft [c]": "brake_temp_fl",
     "braketemperaturefrontright [c]": "brake_temp_fr",
     # Slip
-    "wheelslipRearleft [%]": "slip_rl",
+    "wheelsliprearleft [%]": "slip_rl",
     "wheelsliprearright [%]": "slip_rr",
     "wheelslipfrontleft [%]": "slip_fl",
     "wheelslipfrontright [%]": "slip_fr",

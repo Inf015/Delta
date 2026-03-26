@@ -34,12 +34,12 @@ function CompareContent() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    getRacingSessions().then(setSessions)
+    getRacingSessions().then(setSessions).catch(() => setError('No se pudieron cargar las sesiones.'))
   }, [])
 
   const sessionA = sessions.find((s) => s.id === aId)
   const candidatesB = sessions.filter(
-    (s) => s.id !== aId && (!sessionA || s.track === sessionA.track)
+    (s) => s.id !== aId && (!sessionA || s.track === sessionA?.track)
   )
 
   async function runCompare() {

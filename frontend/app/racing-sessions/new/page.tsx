@@ -45,7 +45,7 @@ export default function NewRacingSession() {
           ...prev,
           track: p.track,
           car: p.car,
-          simulator: p.simulator.toUpperCase(),
+          simulator: (p.simulator || '').toUpperCase(),
           session_date: p.session_date.slice(0, 10),
           session_type: p.session_type,
         }))

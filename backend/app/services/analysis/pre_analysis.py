@@ -232,18 +232,23 @@ def compute(lap: ParsedLap) -> dict:
         }
     fuel_s = _series(df, "fuel")
     if fuel_s is not None and len(fuel_s) > 10:
-        result["fuel"] = {
-            "start": round(float(fuel_s.iloc[0]), 2),
-            "end":   round(float(fuel_s.iloc[-1]), 2),
-            "used":  round(float(fuel_s.iloc[0] - fuel_s.iloc[-1]), 2),
-        }
+        import pandas as _pd
+        f_start = fuel_s.iloc[0]
+        f_end   = fuel_s.iloc[-1]
+        if _pd.notna(f_start) and _pd.notna(f_end) and f_start >= f_end:
+            result["fuel"] = {
+                "start": round(float(f_start), 2),
+                "end":   round(float(f_end), 2),
+                "used":  round(float(f_start - f_end), 2),
+            }
 
     # ── Sector más débil ──────────────────────────────────────────────────────
     if m.s1 and m.s2 and m.s3 and m.s1 > 0 and m.s2 > 0 and m.s3 > 0:
-        sectors = {"S1": m.s1, "S2": m.s2, "S3": m.s3}
-        # sector débil = el que representa más % del total respecto a pista larga
-        # (simple: el más lento en términos absolutos)
-        result["weak_sector"] = max(sectors, key=lambda k: sectors[k])
+        # Validar que los sectores sumen aproximadamente el tiempo de vuelta
+        sector_sum = m.s1 + m.s2 + m.s3
+        if m.lap_time > 0 and abs(sector_sum - m.lap_time) < 1.0:
+            sectors = {"S1": m.s1, "S2": m.s2, "S3": m.s3}
+            result["weak_sector"] = max(sectors, key=lambda k: sectors[k])
 
     # ── Zonas de frenada detectadas (top 5) ────────────────────────────────────
     brk_s = _series(df, "brake")
@@ -385,7 +390,7 @@ def _detect_incidents(
                     "detail": f"Slip 4 ruedas {min(vals):.0f}–{max(vals):.0f}% — posible suelo fuera de pista",
                     "severity": "medium",
                 })
-            elif not all(v > 10 for v in vals):
+            elif not all(v > 8 for v in vals):
                 in_event = False
 
     # 5. Pico de G vertical >3 G → kerb severo o salto
