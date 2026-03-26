@@ -112,36 +112,36 @@ def _build_profile_summary(profile: KnowledgeProfile | None, prev_recs: list | N
         if latest.get("handling"):
             lines.append(f"Comportamiento habitual: {latest['handling']}")
 
-    # Problemas confirmados (≥3 sesiones con el mismo problema)
+    # Problemas confirmados (≥3 sesiones — top 3 por frecuencia)
     recurring = profile.recurring_issues or {}
-    confirmed = [(area, data) for area, data in recurring.items() if data.get("confirmed")]
+    confirmed = sorted(
+        [(area, data) for area, data in recurring.items() if data.get("confirmed")],
+        key=lambda x: x[1].get("count", 0), reverse=True
+    )[:3]
     if confirmed:
         lines.append("\nPROBLEMAS CONFIRMADOS (detectados en 3+ sesiones — tratar como hechos, no hipótesis):")
         for area, data in confirmed:
             lines.append(f"  ✗ {area} — visto {data['count']} veces")
 
-    unconfirmed = [(area, data) for area, data in recurring.items()
-                   if not data.get("confirmed") and data.get("count", 0) >= 2]
+    unconfirmed = sorted(
+        [(area, data) for area, data in recurring.items()
+         if not data.get("confirmed") and data.get("count", 0) >= 2],
+        key=lambda x: x[1].get("count", 0), reverse=True
+    )[:2]
     if unconfirmed:
         lines.append("\nProblemas repetidos (2 sesiones):")
         for area, data in unconfirmed:
             lines.append(f"  ? {area} — visto {data['count']} veces")
 
-    # Recomendaciones anteriores y su resultado
+    # Solo recomendaciones testeadas con resultado significativo
     if prev_recs:
-        lines.append("\nRECOMENDACIONES PREVIAS Y RESULTADO:")
-        for rec in prev_recs:
-            if rec.tested and rec.delta_improvement is not None:
-                if rec.delta_improvement > 0.05:
-                    result = f"✓ FUNCIONÓ (+{rec.delta_improvement:.3f}s de mejora)"
-                elif rec.delta_improvement < -0.05:
-                    result = f"✗ Empeoró ({rec.delta_improvement:.3f}s)"
-                else:
-                    result = "→ Sin cambio significativo"
-            else:
-                result = "→ Primera sesión aplicando esto"
-            zone = f" [{rec.zone}]" if rec.zone else ""
-            lines.append(f"  • {rec.text}{zone} — {result}")
+        useful = [r for r in prev_recs if r.tested and r.delta_improvement is not None and abs(r.delta_improvement) > 0.05]
+        if useful:
+            lines.append("\nRECOMENDACIONES PREVIAS Y RESULTADO:")
+            for rec in useful:
+                result = f"✓ FUNCIONÓ (+{rec.delta_improvement:.3f}s)" if rec.delta_improvement > 0.05 else f"✗ Empeoró ({rec.delta_improvement:.3f}s)"
+                zone = f" [{rec.zone}]" if rec.zone else ""
+                lines.append(f"  • {rec.text}{zone} — {result}")
 
     return "\n".join(lines)
 
@@ -195,7 +195,7 @@ def analyze(
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=3072,
+        max_tokens=1500,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -280,7 +280,7 @@ def get_track_info_from_claude(track_id: str, track_length_m: float | None = Non
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=800,
+        max_tokens=500,
         system="Eres un experto en circuitos de automovilismo y sim racing. Responde siempre con JSON válido.",
         messages=[{"role": "user", "content": prompt}],
     )
@@ -419,18 +419,26 @@ def analyze_session(
     prev_setup_block = ""
     if prev_setup and setup_data:
         _SETUP_SKIP = {"version", "__metadata__", "HEADER", "CAR"}
-        changes: list[str] = []
+        # Priorizar secciones relevantes al rendimiento
+        _PRIORITY = {"TYRES": 0, "BRAKES": 1, "SUSPENSION": 2, "AERO": 3, "AERODYNAMICS": 3}
+        changes: list[tuple[int, str]] = []
         for section, values in setup_data.items():
             if section.upper() in _SETUP_SKIP:
                 continue
             prev_section = prev_setup.get(section)
             if isinstance(values, dict) and isinstance(prev_section, dict):
+                priority = _PRIORITY.get(section.upper(), 9)
                 for key, val in values.items():
                     prev_val = prev_section.get(key)
                     if prev_val is not None and prev_val != val:
-                        changes.append(f"  {section}.{key}: {prev_val} → {val}")
+                        changes.append((priority, f"  {section}.{key}: {prev_val} → {val}"))
         if changes:
-            prev_setup_block = "\n\nCAMBIOS DE SETUP RESPECTO A SESIÓN ANTERIOR (misma pista/auto):\n" + "\n".join(changes)
+            # Ordenar por prioridad y limitar a 15 cambios más relevantes
+            changes.sort(key=lambda x: x[0])
+            top_changes = [c for _, c in changes[:15]]
+            prev_setup_block = "\n\nCAMBIOS DE SETUP RESPECTO A SESIÓN ANTERIOR (misma pista/auto):\n" + "\n".join(top_changes)
+            if len(changes) > 15:
+                prev_setup_block += f"\n  ... y {len(changes) - 15} cambios más"
             prev_setup_block += "\nAnaliza si estos cambios mejoraron o empeoraron el rendimiento según los datos de la sesión."
 
     prompt = _SESSION_PROMPT.format(
@@ -440,7 +448,7 @@ def analyze_session(
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=4096,
+        max_tokens=3000,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )

@@ -77,7 +77,7 @@ def update_profile(
 
     # ── Sector débil ──────────────────────────────────────────────────────────
     weak = pre_analysis.get("weak_sector")
-    if weak:
+    if weak and weak in ("S1", "S2", "S3"):
         profile.weak_sector = weak
 
     # ── Tendencia (segundos ganados cada 5 sesiones) ──────────────────────────
@@ -150,17 +150,27 @@ def update_after_ai(
     if not issues:
         return
 
+    areas_this_session: set[str] = set()
     recurring: dict = dict(profile.recurring_issues or {})
     for issue in issues:
         area = (issue.get("area") or "").strip().lower()
         if not area:
             continue
-        entry = recurring.get(area, {"count": 0, "confirmed": False, "last_lap_time": 0.0})
+        areas_this_session.add(area)
+        entry = recurring.get(area, {"count": 0, "confirmed": False, "sessions_since_seen": 0, "last_lap_time": 0.0})
         entry["count"] += 1
+        entry["sessions_since_seen"] = 0
         entry["last_lap_time"] = current_lap_time
         if entry["count"] >= 3:
             entry["confirmed"] = True
         recurring[area] = entry
+
+    # Decaer issues no vistos esta sesión — si llevan 5 sesiones sin aparecer, dejar de confirmarlos
+    for area, entry in recurring.items():
+        if area not in areas_this_session:
+            entry["sessions_since_seen"] = entry.get("sessions_since_seen", 0) + 1
+            if entry.get("confirmed") and entry["sessions_since_seen"] >= 5:
+                entry["confirmed"] = False
 
     profile.recurring_issues = recurring
     db.flush()
