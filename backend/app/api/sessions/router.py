@@ -23,7 +23,8 @@ PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 def _fmt(lap_time: float) -> str:
-    if lap_time <= 0:
+    import math
+    if not isinstance(lap_time, (int, float)) or lap_time <= 0 or math.isnan(lap_time) or math.isinf(lap_time):
         return "—"
     m = int(lap_time // 60)
     s = lap_time - m * 60
@@ -140,5 +141,7 @@ def download_pdf(session_id: str, db: Session = Depends(get_db)):
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="Archivo PDF no encontrado en disco")
 
-    filename = f"delta_{s.track}_{_fmt(s.lap_time)}.pdf".replace(":", "-").replace(" ", "_")
+    import re
+    safe_track = re.sub(r"[^\w\-]", "_", s.track or "session")[:40]
+    filename = f"delta_{safe_track}_{_fmt(s.lap_time)}.pdf".replace(":", "-")
     return FileResponse(path=str(pdf_path), media_type="application/pdf", filename=filename)

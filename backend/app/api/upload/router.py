@@ -182,15 +182,16 @@ async def upload_csv(
         m = parsed.meta
         sim_enum, sub_dir = _sim_enum(m.simulator)
 
-        # Auto-llenar sesión con datos del primer CSV válido
+        # Auto-llenar sesión con datos del primer CSV válido (solo si hay metadata válida)
         if not session_meta_filled and rs.track is None:
-            rs.track = m.track
-            rs.car = m.car
-            rs.simulator = sim_enum
-            rs.session_date = m.date
-            rs.session_type = _session_type(m.event)
-            db.flush()
-            session_meta_filled = True
+            if m.track and m.car and m.track.strip() and m.car.strip():
+                rs.track = m.track.strip()
+                rs.car = m.car.strip()
+                rs.simulator = sim_enum
+                rs.session_date = m.date
+                rs.session_type = _session_type(m.event)
+                db.flush()
+                session_meta_filled = True
 
         dest_dir = Path(settings.csv_data_path) / sub_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -198,36 +199,41 @@ async def upload_csv(
         dest_path = dest_dir / f"{uuid.uuid4()}_{safe_name}"
         shutil.move(str(tmp), dest_path)
 
-        lap = TelemetrySession(
-            user_id=PLACEHOLDER_USER_ID,
-            racing_session_id=rs.id,
-            simulator=sim_enum,
-            track=rs.track or m.track,
-            car=rs.car or m.car,
-            session_type=rs.session_type or _session_type(m.event),
-            lap_number=m.lap_number,
-            lap_time=m.lap_time,
-            s1=m.s1,
-            s2=m.s2,
-            s3=m.s3,
-            tyre_compound=m.tyre_compound,
-            track_temp=m.track_temp,
-            ambient_temp=m.ambient_temp,
-            track_length=m.track_length,
-            valid=m.valid,
-            source=SourceType.upload,
-            csv_path=str(dest_path),
-            session_date=rs.session_date or m.date,
-        )
+        try:
+            lap = TelemetrySession(
+                user_id=PLACEHOLDER_USER_ID,
+                racing_session_id=rs.id,
+                simulator=sim_enum,
+                track=rs.track or m.track,
+                car=rs.car or m.car,
+                session_type=rs.session_type or _session_type(m.event),
+                lap_number=m.lap_number,
+                lap_time=m.lap_time,
+                s1=m.s1,
+                s2=m.s2,
+                s3=m.s3,
+                tyre_compound=m.tyre_compound,
+                track_temp=m.track_temp,
+                ambient_temp=m.ambient_temp,
+                track_length=m.track_length,
+                valid=m.valid,
+                source=SourceType.upload,
+                csv_path=str(dest_path),
+                session_date=rs.session_date or m.date,
+            )
 
-        db.add(lap)
-        db.flush()
-        db.refresh(lap)
+            db.add(lap)
+            db.flush()
+            db.refresh(lap)
 
-        # Invalidar caché del reporte al agregar nuevas vueltas
-        rs.report_cache = None
+            # Invalidar caché del reporte al agregar nuevas vueltas
+            rs.report_cache = None
 
-        process_session.delay(str(lap.id))
+            process_session.delay(str(lap.id))
+        except Exception:
+            # Si falla el DB, eliminar el CSV ya movido para evitar huérfanos
+            dest_path.unlink(missing_ok=True)
+            raise
 
         created_sessions.append(SessionOut(
             session_id=lap.id,
