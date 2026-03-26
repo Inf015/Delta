@@ -86,6 +86,24 @@ def _generate_report(rs: RacingSession, db: Session) -> dict:
         except Exception:
             pass
 
+    # Setup de la sesión anterior en la misma pista/auto para comparación
+    prev_setup: dict | None = None
+    if rs.setup_data and rs.track:
+        prev_rs = (
+            db.query(RacingSession)
+            .filter(
+                RacingSession.user_id == rs.user_id,
+                RacingSession.track == rs.track,
+                RacingSession.car == rs.car,
+                RacingSession.id != rs.id,
+                RacingSession.setup_data.isnot(None),
+            )
+            .order_by(RacingSession.created_at.desc())
+            .first()
+        )
+        if prev_rs:
+            prev_setup = prev_rs.setup_data
+
     report = sr.compute(laps_data, setup_data=rs.setup_data, track_info=track_info_dict)
     best_pre = min(laps_data, key=lambda l: l["lap_time"]).get("pre_analysis") or {}
 
@@ -94,6 +112,7 @@ def _generate_report(rs: RacingSession, db: Session) -> dict:
         best_lap_pre=best_pre,
         setup_data=rs.setup_data,
         track_info=track_info_dict,
+        prev_setup=prev_setup,
     )
     report.update(ai_sections)
 
@@ -613,7 +632,7 @@ def compare_sessions(body: CompareRequest, db: Session = Depends(get_db)) -> dic
     )
     logging.getLogger(__name__).info(
         "Compare Claude call — %s vs %s — tokens: %d in / %d out",
-        aId, bId, cmp_tok_in, cmp_tok_out,
+        body.session_a_id, body.session_b_id, cmp_tok_in, cmp_tok_out,
     )
 
     def _metrics(lap: TelemetrySession, pre: dict) -> dict:

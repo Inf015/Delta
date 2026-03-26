@@ -28,9 +28,14 @@ Eres un ingeniero de pista experto en sim racing. Analizas datos de telemetría 
 y das feedback técnico directo, específico y accionable al piloto.
 
 Reglas:
+- IDIOMA: Responde SIEMPRE en español, sin excepciones. Nunca uses inglés.
 - Sé directo y conciso. No rellenes con frases vacías.
 - Basa TODO en los números del pre-análisis. Si no hay dato, no lo inventes.
 - Las recomendaciones deben ser ejecutables en la próxima sesión.
+- SETUP: Cuando sugieras cambios de setup de Assetto Corsa, usa SIEMPRE valores \
+que el juego permita seleccionar (ej: presiones en incrementos de 0.1 PSI, \
+muelles en incrementos de 100 N/m, ARB en enteros). Nunca sugiereas valores \
+intermedios imposibles de seleccionar en el juego.
 - Responde SIEMPRE con JSON válido, sin markdown, sin texto extra.
 """
 
@@ -363,6 +368,7 @@ def analyze_session(
     best_lap_pre: dict,
     setup_data: dict | None = None,
     track_info: dict | None = None,
+    prev_setup: dict | None = None,
 ) -> tuple[dict, int, int]:
     """
     Llama Claude Haiku con el resumen de sesión completa y el pre-análisis de la mejor vuelta.
@@ -409,10 +415,28 @@ def analyze_session(
         compact_setup = {k: v for k, v in setup_data.items() if k.upper() not in _SETUP_SKIP}
         setup_block = f"\n\nSETUP DEL PILOTO:\n{json.dumps(compact_setup, ensure_ascii=False, separators=(',', ':'))}"
 
+    # Comparación de setup respecto a sesión anterior
+    prev_setup_block = ""
+    if prev_setup and setup_data:
+        _SETUP_SKIP = {"version", "__metadata__", "HEADER", "CAR"}
+        changes: list[str] = []
+        for section, values in setup_data.items():
+            if section.upper() in _SETUP_SKIP:
+                continue
+            prev_section = prev_setup.get(section)
+            if isinstance(values, dict) and isinstance(prev_section, dict):
+                for key, val in values.items():
+                    prev_val = prev_section.get(key)
+                    if prev_val is not None and prev_val != val:
+                        changes.append(f"  {section}.{key}: {prev_val} → {val}")
+        if changes:
+            prev_setup_block = "\n\nCAMBIOS DE SETUP RESPECTO A SESIÓN ANTERIOR (misma pista/auto):\n" + "\n".join(changes)
+            prev_setup_block += "\nAnaliza si estos cambios mejoraron o empeoraron el rendimiento según los datos de la sesión."
+
     prompt = _SESSION_PROMPT.format(
         session_data=json.dumps(compact_summary, ensure_ascii=False, indent=2),
         best_lap_pre=json.dumps(compact_pre, ensure_ascii=False, indent=2),
-    ) + track_block + setup_block
+    ) + track_block + setup_block + prev_setup_block
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
