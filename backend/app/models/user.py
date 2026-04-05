@@ -15,6 +15,11 @@ class Plan(str, enum.Enum):
     team = "team"
 
 
+class UserRole(str, enum.Enum):
+    pilot      = "pilot"
+    technician = "technician"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -38,6 +43,8 @@ class User(Base):
 
     # Estado
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    role: Mapped[UserRole] = mapped_column(SAEnum(UserRole), nullable=False, default=UserRole.pilot)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
         default=lambda: datetime.now(timezone.utc)

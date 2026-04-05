@@ -40,6 +40,7 @@ services:
       - csvdata:/data/csvs
       - pdfdata:/data/pdfs
       - kbdata:/data/knowledge_base
+      - trackmaps:/data/track_maps
     depends_on:
       db:
         condition: service_healthy
@@ -48,7 +49,21 @@ services:
     networks:
       - internal
       - web
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # Ejecutar migraciones antes de arrancar el servidor
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   worker:
     build:
@@ -63,6 +78,7 @@ services:
       - csvdata:/data/csvs
       - pdfdata:/data/pdfs
       - kbdata:/data/knowledge_base
+      - trackmaps:/data/track_maps
     depends_on:
       db:
         condition: service_healthy
@@ -70,7 +86,18 @@ services:
         condition: service_healthy
     networks:
       - internal
-    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2 --max-tasks-per-child=200
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.core.celery_app", "inspect", "ping", "--timeout", "5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   frontend:
     build:
@@ -94,20 +121,28 @@ services:
     restart: unless-stopped
     profiles: [prod]
     ports:
-      - "443:80"
+      - "80:80"
+      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro  # montar certificados TLS aquí
     depends_on:
       - api
       - frontend
     networks:
       - web
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
 
 volumes:
   pgdata:
   csvdata:
   pdfdata:
   kbdata:
+  trackmaps:
 
 networks:
   internal:

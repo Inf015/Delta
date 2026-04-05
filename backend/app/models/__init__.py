@@ -1,4 +1,4 @@
-from app.models.user import User, Plan  # noqa: F401
+from app.models.user import User, Plan, UserRole  # noqa: F401
 from app.models.team import Team, TeamMember  # noqa: F401
 from app.models.session import TelemetrySession, Simulator, SessionType, SourceType  # noqa: F401
 from app.models.racing_session import RacingSession  # noqa: F401

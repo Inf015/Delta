@@ -1,6 +1,7 @@
-const API = (typeof window === 'undefined'
-  ? process.env.API_URL
-  : process.env.NEXT_PUBLIC_API_URL) || 'http://localhost:8000'
+// Server-side: URL interna de Docker. Client-side: origen del browser (funciona con cualquier URL).
+const API = typeof window === 'undefined'
+  ? (process.env.API_URL || 'http://localhost:8000')
+  : window.location.origin
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -282,12 +283,132 @@ export interface SessionReport {
   }
 }
 
+// ── Auth types ────────────────────────────────────────────────────────────────
+
+export interface AuthResult {
+  access_token: string
+  token_type: string
+  user_id: string
+  email: string
+  name: string
+  is_admin: boolean
+  role: string
+}
+
+// ── Admin types ───────────────────────────────────────────────────────────────
+
+export interface AdminUser {
+  id: string
+  email: string
+  name: string
+  plan: string
+  role: string
+  is_active: boolean
+  is_admin: boolean
+  analyses_used: number
+  analyses_limit: number
+  racing_sessions: number
+  laps_total: number
+  tokens_used: number
+  created_at: string
+}
+
+// ── Team types ────────────────────────────────────────────────────────────────
+
+export interface TeamPilot {
+  id: string
+  email: string
+  name: string
+  plan: string
+  racing_sessions: number
+}
+
+export interface TeamInfo {
+  id: string
+  name: string
+  owner_id: string
+  pilots: TeamPilot[]
+}
+
+export interface TeamSession {
+  id: string
+  pilot_email: string
+  pilot_name: string
+  name: string | null
+  track: string | null
+  car: string | null
+  session_date: string | null
+  lap_count: number
+  best_lap_fmt: string
+  has_report: boolean
+}
+
+export interface AdminStats {
+  total_users: number
+  active_users: number
+  total_racing_sessions: number
+  total_laps: number
+  total_tokens: number
+  users_by_plan: Record<string, number>
+}
+
+export interface AdminSession {
+  id: string
+  name: string | null
+  track: string | null
+  car: string | null
+  simulator: string | null
+  session_type: string | null
+  session_date: string | null
+  lap_count: number
+  best_lap_fmt: string
+  created_at: string
+}
+
+// ── Auth header helper ────────────────────────────────────────────────────────
+
+function authHeader(): Record<string, string> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('delta_token') : null
+  return {
+    'ngrok-skip-browser-warning': 'true',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+// ── Auth functions ────────────────────────────────────────────────────────────
+
+export async function login(email: string, password: string): Promise<AuthResult> {
+  const res = await fetch(`${API}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    body: JSON.stringify({ email, password }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al iniciar sesión')
+  }
+  return res.json()
+}
+
+export async function register(email: string, password: string, name: string): Promise<AuthResult> {
+  const res = await fetch(`${API}/api/v1/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+    body: JSON.stringify({ email, password, name }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al registrarse')
+  }
+  return res.json()
+}
+
 // ── API functions ─────────────────────────────────────────────────────────────
 
 export async function previewCSV(file: File): Promise<CSVPreview> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch(`${API}/api/v1/upload/preview`, { method: 'POST', body: form })
+  const res = await fetch(`${API}/api/v1/upload/preview`, { method: 'POST', headers: { ...authHeader() }, body: form })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al leer el CSV')
@@ -305,7 +426,7 @@ export async function createRacingSession(data: Partial<{
 }> = {}): Promise<RacingSession> {
   const res = await fetch(`${API}/api/v1/racing-sessions/`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -325,7 +446,7 @@ export async function updateRacingSession(id: string, data: Partial<{
 }>): Promise<RacingSession> {
   const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -343,8 +464,17 @@ export async function uploadCSVs(files: File[], racingSessionId: string): Promis
   const form = new FormData()
   files.forEach((f) => form.append('files', f))
   form.append('racing_session_id', racingSessionId)
-  const res = await fetch(`${API}/api/v1/upload/`, { method: 'POST', body: form })
+  const url = `${API}/api/v1/upload/`
+  console.log('[Delta] uploadCSVs fetch to', url, 'files:', files.map(f => f.name + '(' + f.size + 'b)'))
+  let res: Response
+  try {
+    res = await fetch(url, { method: 'POST', headers: { ...authHeader() }, body: form })
+  } catch (netErr) {
+    console.error('[Delta] uploadCSVs network error:', netErr)
+    throw new Error('Error de red al subir archivos. Revisa tu conexión.')
+  }
   if (!res.ok) {
+    if (res.status === 413) throw new Error('Archivos demasiado grandes. Súbelos de a pocos (máx ~400MB total).')
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al subir archivos')
   }
@@ -352,25 +482,25 @@ export async function uploadCSVs(files: File[], racingSessionId: string): Promis
 }
 
 export async function getSessions(): Promise<Session[]> {
-  const res = await fetch(`${API}/api/v1/sessions/`, { cache: 'no-store' })
+  const res = await fetch(`${API}/api/v1/sessions/`, { cache: 'no-store', headers: { ...authHeader() } })
   if (!res.ok) return []
   return res.json()
 }
 
 export async function getAnalysis(sessionId: string): Promise<Analysis | null> {
-  const res = await fetch(`${API}/api/v1/sessions/${sessionId}/analysis`, { cache: 'no-store' })
+  const res = await fetch(`${API}/api/v1/sessions/${sessionId}/analysis`, { cache: 'no-store', headers: { ...authHeader() } })
   if (!res.ok) return null
   return res.json()
 }
 
 export async function getRacingSessions(): Promise<RacingSession[]> {
-  const res = await fetch(`${API}/api/v1/racing-sessions/`, { cache: 'no-store' })
+  const res = await fetch(`${API}/api/v1/racing-sessions/`, { cache: 'no-store', headers: { ...authHeader() } })
   if (!res.ok) return []
   return res.json()
 }
 
 export async function deleteRacingSession(id: string): Promise<void> {
-  const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, { method: 'DELETE' })
+  const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, { method: 'DELETE', headers: { ...authHeader() } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al eliminar sesión')
@@ -378,13 +508,13 @@ export async function deleteRacingSession(id: string): Promise<void> {
 }
 
 export async function getRacingSession(id: string): Promise<RacingSessionDetail | null> {
-  const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, { cache: 'no-store' })
+  const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, { cache: 'no-store', headers: { ...authHeader() } })
   if (!res.ok) return null
   return res.json()
 }
 
 export async function getSessionReport(id: string): Promise<SessionReport | null> {
-  const res = await fetch(`${API}/api/v1/racing-sessions/${id}/report`, { cache: 'no-store' })
+  const res = await fetch(`${API}/api/v1/racing-sessions/${id}/report`, { cache: 'no-store', headers: { ...authHeader() } })
   if (!res.ok) return null
   return res.json()
 }
@@ -396,7 +526,7 @@ export function sessionPdfUrl(id: string): string {
 export async function uploadSetup(racingSessionId: string, file: File): Promise<{ ok: boolean; sections: string[] }> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch(`${API}/api/v1/racing-sessions/${racingSessionId}/setup`, { method: 'POST', body: form })
+  const res = await fetch(`${API}/api/v1/racing-sessions/${racingSessionId}/setup`, { method: 'POST', headers: { ...authHeader() }, body: form })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al subir setup')
@@ -407,7 +537,7 @@ export async function uploadSetup(racingSessionId: string, file: File): Promise<
 export async function uploadTrackMap(racingSessionId: string, file: File): Promise<{ ok: boolean; track_id: string }> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch(`${API}/api/v1/racing-sessions/${racingSessionId}/track-map`, { method: 'POST', body: form })
+  const res = await fetch(`${API}/api/v1/racing-sessions/${racingSessionId}/track-map`, { method: 'POST', headers: { ...authHeader() }, body: form })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al subir mapa')
@@ -422,7 +552,7 @@ export function trackMapUrl(racingSessionId: string): string {
 export async function compareRacingSessions(aId: string, bId: string): Promise<ComparisonResult> {
   const res = await fetch(`${API}/api/v1/racing-sessions/compare`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify({ session_a_id: aId, session_b_id: bId }),
   })
   if (!res.ok) {
@@ -430,4 +560,168 @@ export async function compareRacingSessions(aId: string, bId: string): Promise<C
     throw new Error(err.detail || 'Error al comparar sesiones')
   }
   return res.json()
+}
+
+// ── Delta Map types and API ───────────────────────────────────────────────────
+
+export interface DeltaPoint {
+  x: number
+  z: number
+  delta: number
+  delta_norm: number
+  speed_a: number
+  speed_b: number
+}
+
+export interface DeltaMap {
+  points: DeltaPoint[]
+  session_a: { id: string; track: string; best_lap_fmt: string; lap_time: number }
+  session_b: { id: string; track: string; best_lap_fmt: string; lap_time: number }
+  delta_total: number
+}
+
+export async function getDeltaMap(sessionId: string, refId: string): Promise<DeltaMap> {
+  const res = await fetch(
+    `${API}/api/v1/racing-sessions/${sessionId}/delta-map?ref=${refId}`,
+    { headers: { ...authHeader() } }
+  )
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || 'Error al calcular delta map')
+  }
+  return res.json()
+}
+
+// ── Lap Telemetry types and API ───────────────────────────────────────────────
+
+export interface LapTelemetryPoint {
+  d: number        // 0-1 lap distance
+  x: number
+  z: number
+  speed: number    // km/h
+  throttle: number // 0-100
+  brake: number    // 0-100
+  gear: number     // 0-8
+}
+
+export interface LapTelemetry {
+  lap_time: number
+  lap_time_fmt: string
+  lap_number: number
+  points: LapTelemetryPoint[]
+}
+
+export async function getLapTelemetry(sessionId: string): Promise<LapTelemetry | null> {
+  const res = await fetch(
+    `${API}/api/v1/racing-sessions/${sessionId}/lap-telemetry`,
+    { headers: { ...authHeader() } }
+  )
+  if (!res.ok) return null
+  return res.json()
+}
+
+// ── Admin API ─────────────────────────────────────────────────────────────────
+
+async function adminFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const res = await fetch(`${API}/api/v1/admin${path}`, {
+    ...options,
+    headers: { ...authHeader(), ...(options.headers as Record<string, string> || {}) },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(typeof err.detail === 'string' ? err.detail : 'Error en el servidor')
+  }
+  return res
+}
+
+export async function adminGetStats(): Promise<AdminStats> {
+  return (await adminFetch('/stats')).json()
+}
+
+export async function adminListUsers(): Promise<AdminUser[]> {
+  return (await adminFetch('/users')).json()
+}
+
+export async function adminCreateUser(data: {
+  email: string
+  password: string
+  name?: string
+  plan?: string
+  is_admin?: boolean
+}): Promise<AdminUser> {
+  return (await adminFetch('/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })).json()
+}
+
+export async function adminUpdateUser(
+  userId: string,
+  data: { name?: string; plan?: string; role?: string; is_active?: boolean; is_admin?: boolean; password?: string }
+): Promise<AdminUser> {
+  return (await adminFetch(`/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })).json()
+}
+
+export async function adminGetUserSessions(userId: string): Promise<AdminSession[]> {
+  return (await adminFetch(`/users/${userId}/sessions`)).json()
+}
+
+// ── Team / Technician functions ───────────────────────────────────────────────
+
+async function teamFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('delta_token') : null
+  const res = await fetch(`${API}/api/v1/teams${path}`, {
+    ...options,
+    headers: {
+      'ngrok-skip-browser-warning': 'true',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(typeof err.detail === 'string' ? err.detail : 'Error en el servidor')
+  }
+  return res
+}
+
+export async function createTeam(name: string): Promise<TeamInfo> {
+  return (await teamFetch('/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })).json()
+}
+
+export async function getMyTeam(): Promise<TeamInfo> {
+  return (await teamFetch('/my')).json()
+}
+
+export async function addPilotToTeam(email: string): Promise<TeamPilot> {
+  return (await teamFetch('/my/members', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })).json()
+}
+
+export async function removePilotFromTeam(pilotId: string): Promise<void> {
+  await teamFetch(`/my/members/${pilotId}`, { method: 'DELETE' })
+}
+
+export async function getTeamSessions(): Promise<TeamSession[]> {
+  return (await teamFetch('/my/sessions')).json()
+}
+
+export async function getPilotSessions(pilotId: string): Promise<TeamSession[]> {
+  return (await teamFetch(`/my/pilots/${pilotId}/sessions`)).json()
+}
+
+export async function getPilotSessionReport(pilotId: string, sessionId: string): Promise<Record<string, unknown>> {
+  return (await teamFetch(`/my/pilots/${pilotId}/sessions/${sessionId}/report`)).json()
 }
