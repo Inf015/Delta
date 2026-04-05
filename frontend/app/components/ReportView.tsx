@@ -173,28 +173,67 @@ function Section0({ track, sessionId }: { track: TrackInfo; sessionId: string })
 }
 
 function Section1({ s }: { s: SessionReport['section_1_summary'] }) {
+  const hasF1Sectors = s.f1_best_s1 > 0 && s.f1_best_s2 > 0 && s.f1_best_s3 > 0
+  const weakLabel = s.weak_sector
+    ? (s.weak_sector_count && s.weak_sector_total
+        ? `${s.weak_sector} (${s.weak_sector_count}/${s.weak_sector_total} vueltas)`
+        : s.weak_sector)
+    : null
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-0 border border-gray-800">
-      <table className="w-full"><tbody>
-        <MetricRow label="Total de vueltas" value={String(s.total_laps)} />
-        <MetricRow label="Mejor vuelta" value={s.best_lap_fmt} highlight />
-        <MetricRow label="Peor vuelta" value={s.worst_lap_fmt} />
-        <MetricRow label="Promedio" value={s.avg_lap_fmt} />
-        <MetricRow label="Sector 1 (mejor vuelta)" value={s.best_s1_fmt} />
-        <MetricRow label="Sector 2 (mejor vuelta)" value={s.best_s2_fmt} />
-        <MetricRow label="Sector 3 (mejor vuelta)" value={s.best_s3_fmt} />
-      </tbody></table>
-      <table className="w-full"><tbody>
-        {s.max_speed_kmh && <MetricRow label="Velocidad máxima" value={`${s.max_speed_kmh} km/h`} />}
-        {s.throttle_avg_pct && <MetricRow label="Throttle promedio" value={`${s.throttle_avg_pct}%`} />}
-        {s.throttle_full_pct && <MetricRow label="A fondo (>95%)" value={`${s.throttle_full_pct}% del tiempo`} />}
-        <MetricRow label="Tiempo teórico óptimo" value={`${s.theoretical_best_fmt} (−${s.potential_gain.toFixed(3)}s potencial)`} />
-        {s.fuel_used_per_lap && <MetricRow label="Combustible usado" value={`${s.fuel_used_per_lap} l/vuelta aprox.`} />}
-        {s.rpm_max && <MetricRow label="RPM máximo" value={`${s.rpm_max} rpm`} />}
-        {s.brake_hard_pct != null && <MetricRow label="Frenada intensa (>80%)" value={`${s.brake_hard_pct}% del tiempo`} />}
-        {s.handling && <MetricRow label="Comportamiento" value={s.handling} />}
-        {s.weak_sector && <MetricRow label="Sector más débil" value={s.weak_sector} />}
-      </tbody></table>
+    <div className="space-y-0 border border-gray-800">
+      <div className="grid grid-cols-1 md:grid-cols-2">
+        <table className="w-full"><tbody>
+          <MetricRow label="Total de vueltas" value={String(s.total_laps)} />
+          <MetricRow label="Mejor vuelta" value={s.best_lap_fmt} highlight />
+          <MetricRow label="Peor vuelta" value={s.worst_lap_fmt} />
+          <MetricRow label="Promedio" value={s.avg_lap_fmt} />
+          <MetricRow label="Sector 1 (mejor vuelta)" value={s.best_s1_fmt} />
+          <MetricRow label="Sector 2 (mejor vuelta)" value={s.best_s2_fmt} />
+          <MetricRow label="Sector 3 (mejor vuelta)" value={s.best_s3_fmt} />
+        </tbody></table>
+        <table className="w-full"><tbody>
+          {s.max_speed_kmh && <MetricRow label="Velocidad máxima" value={`${s.max_speed_kmh} km/h`} />}
+          {s.throttle_avg_pct && <MetricRow label="Throttle promedio" value={`${s.throttle_avg_pct}%`} />}
+          {s.throttle_full_pct && <MetricRow label="A fondo (>95%)" value={`${s.throttle_full_pct}% del tiempo`} />}
+          <MetricRow label="Tiempo teórico óptimo" value={`${s.theoretical_best_fmt} (−${s.potential_gain.toFixed(3)}s)`} />
+          {s.fuel_used_per_lap && <MetricRow label="Combustible usado" value={`${s.fuel_used_per_lap} l/vuelta`} />}
+          {s.rpm_max && <MetricRow label="RPM máximo" value={`${s.rpm_max} rpm`} />}
+          {s.brake_hard_pct != null && <MetricRow label="Frenada intensa (>80%)" value={`${s.brake_hard_pct}% del tiempo`} />}
+          {s.handling && <MetricRow label="Comportamiento" value={s.handling} />}
+          {weakLabel && <MetricRow label="Sector más débil" value={weakLabel} />}
+        </tbody></table>
+      </div>
+
+      {/* Tabla de ganancia potencial por sector */}
+      {hasF1Sectors && (
+        <div className="border-t border-gray-800 px-4 py-3">
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">
+            Ganancia potencial por sector (mejor S individual vs mejor vuelta)
+          </p>
+          <div className="grid grid-cols-3 gap-3">
+            {([
+              { label: 'S1', best: s.best_s1_fmt, f1: s.f1_best_s1_fmt, gain: s.gain_s1 },
+              { label: 'S2', best: s.best_s2_fmt, f1: s.f1_best_s2_fmt, gain: s.gain_s2 },
+              { label: 'S3', best: s.best_s3_fmt, f1: s.f1_best_s3_fmt, gain: s.gain_s3 },
+            ] as const).map(({ label, best, f1, gain }) => (
+              <div key={label} className="border border-gray-800 p-3">
+                <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">{label}</p>
+                <p className="text-white font-mono text-sm">{best}</p>
+                {gain != null && gain > 0.001 && (
+                  <div className="mt-1 flex items-baseline gap-1">
+                    <span className="text-purple-400 font-mono text-xs font-bold">−{gain.toFixed(3)}s</span>
+                    <span className="text-gray-600 text-xs">→ {f1}</span>
+                  </div>
+                )}
+                {gain != null && gain <= 0.001 && (
+                  <p className="text-green-400 text-xs mt-1">✓ Sector óptimo</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -360,6 +399,9 @@ function Section4({ s }: { s: SessionReport['section_4_tyres'] }) {
 
 function Section5({ s }: { s: SessionReport['section_5_brakes'] }) {
   const corners = ['FL', 'FR', 'RL', 'RR']
+  const bal = s.balance
+  const biasColor = bal?.bias === 'balanced' ? '#22c55e' : '#f97316'
+
   return (
     <div className="space-y-4">
       {s.temp && (
@@ -373,7 +415,35 @@ function Section5({ s }: { s: SessionReport['section_5_brakes'] }) {
           />
         </div>
       )}
-      {s.warning && <p className="text-yellow-500 text-sm border border-yellow-900/50 px-3 py-2">• {s.warning}</p>}
+
+      {/* Balance delantero/trasero */}
+      {bal && bal.front_avg != null && bal.rear_avg != null && (
+        <div className="border border-gray-800 p-3 space-y-2">
+          <p className="text-gray-500 text-xs uppercase tracking-wide font-bold">
+            Balance frenos: <span style={{ color: biasColor }}>{bal.bias === 'balanced' ? 'Equilibrado' : bal.bias === 'front_heavy' ? 'Cargado adelante' : 'Cargado atrás'}</span>
+          </p>
+          <div className="flex items-center gap-3 text-xs">
+            <span className="text-gray-400 w-24 shrink-0">Delantero <span className="font-mono text-white">{bal.front_avg}°C</span></span>
+            <div className="flex-1 bg-gray-900 h-3 relative">
+              {bal.front_avg + bal.rear_avg > 0 && (
+                <div
+                  className="absolute left-0 top-0 h-full"
+                  style={{
+                    width: `${(bal.front_avg / (bal.front_avg + bal.rear_avg)) * 100}%`,
+                    backgroundColor: brakeColor(bal.front_avg),
+                  }}
+                />
+              )}
+            </div>
+            <span className="text-gray-400 w-24 text-right shrink-0">Trasero <span className="font-mono text-white">{bal.rear_avg}°C</span></span>
+          </div>
+        </div>
+      )}
+
+      {s.warning && (
+        <p className="text-yellow-500 text-sm border border-yellow-900/50 px-3 py-2">• {s.warning}</p>
+      )}
+
       {s.zones && s.zones.length > 0 && (
         <div>
           <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Zonas de frenada detectadas:</p>

@@ -220,6 +220,9 @@ export interface SessionReport {
     theoretical_best: number; theoretical_best_fmt: string
     potential_gain: number
     f1_best_s1: number; f1_best_s2: number; f1_best_s3: number
+    f1_best_s1_fmt?: string; f1_best_s2_fmt?: string; f1_best_s3_fmt?: string
+    gain_s1?: number; gain_s2?: number; gain_s3?: number
+    weak_sector_count?: number; weak_sector_total?: number
     max_speed_kmh?: number
     throttle_avg_pct?: number
     throttle_full_pct?: number

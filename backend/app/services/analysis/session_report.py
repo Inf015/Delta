@@ -93,6 +93,13 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
         "f1_best_s1": f1_sectors["s1"],
         "f1_best_s2": f1_sectors["s2"],
         "f1_best_s3": f1_sectors["s3"],
+        "f1_best_s1_fmt": _fmt(f1_sectors["s1"]) if f1_sectors["s1"] else "—",
+        "f1_best_s2_fmt": _fmt(f1_sectors["s2"]) if f1_sectors["s2"] else "—",
+        "f1_best_s3_fmt": _fmt(f1_sectors["s3"]) if f1_sectors["s3"] else "—",
+        # Ganancia potencial por sector
+        "gain_s1": round(best_lap.get("s1", 0) - f1_sectors["s1"], 3) if f1_sectors["valid"] else 0,
+        "gain_s2": round(best_lap.get("s2", 0) - f1_sectors["s2"], 3) if f1_sectors["valid"] else 0,
+        "gain_s3": round(best_lap.get("s3", 0) - f1_sectors["s3"], 3) if f1_sectors["valid"] else 0,
     }
 
     # métricas del mejor pre_analysis
@@ -116,8 +123,19 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
         summary["brake_hard_pct"] = brake_data.get("hard_pct")
     if best_pre.get("handling"):
         summary["handling"] = best_pre.get("handling")
-    if best_pre.get("weak_sector"):
-        summary["weak_sector"] = best_pre.get("weak_sector")
+
+    # Sector débil: mayoría de votos entre todas las vueltas de la sesión
+    all_weak = [
+        (l.get("pre_analysis") or {}).get("weak_sector")
+        for l in laps
+        if (l.get("pre_analysis") or {}).get("weak_sector") in ("S1", "S2", "S3")
+    ]
+    if all_weak:
+        from collections import Counter
+        most_common, count = Counter(all_weak).most_common(1)[0]
+        summary["weak_sector"] = most_common
+        summary["weak_sector_count"] = count
+        summary["weak_sector_total"] = len(all_weak)
 
     # ── Sección 2: Tiempos por vuelta ─────────────────────────────────────────
     lap_table = []
@@ -244,11 +262,20 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
         brake_analysis["temp"] = brake_temp
     if brake_balance:
         brake_analysis["balance"] = brake_balance
-        if brake_balance.get("bias") == "front_heavy":
+        bias = brake_balance.get("bias")
+        f_avg = brake_balance.get("front_avg", 0)
+        r_avg = brake_balance.get("rear_avg", 0)
+        if bias == "front_heavy":
             brake_analysis["warning"] = (
                 f"Frenos delanteros mucho más calientes que traseros "
-                f"({brake_balance.get('front_avg', 0):.0f}°C vs {brake_balance.get('rear_avg', 0):.0f}°C) "
+                f"({f_avg:.0f}°C vs {r_avg:.0f}°C) "
                 f"— considera mover brake bias hacia atrás."
+            )
+        elif bias == "rear_heavy":
+            brake_analysis["warning"] = (
+                f"Frenos traseros mucho más calientes que delanteros "
+                f"({r_avg:.0f}°C vs {f_avg:.0f}°C) "
+                f"— considera mover brake bias hacia delante."
             )
 
     braking_zones = best_pre.get("braking_zones", [])
