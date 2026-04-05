@@ -1,0 +1,11 @@
+# Override para testing con ngrok.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.ngrok.yml up -d
+#
+# Levanta nginx en el puerto 80 sin necesitar --profile prod.
+# Luego correr: ngrok http 80
+
+services:
+  nginx:
+    profiles: []   # Quitar el perfil [prod] para que arranque normalmente
+    ports:
+      - "80:80"

@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     # CORS — separar por comas en producción: https://app.example.com,https://www.example.com
     allowed_origins: str = "http://localhost:3000"
+    # Permite cualquier origen *.ngrok-free.app / *.ngrok.io / *.ngrok.app sin listarlos
+    allow_ngrok: bool = True
 
     # Entorno (development | production)
     environment: str = "development"
