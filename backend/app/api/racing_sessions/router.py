@@ -41,6 +41,10 @@ from app.utils.formatters import fmt_lap_time as _fmt
 router = APIRouter(prefix="/racing-sessions", tags=["racing-sessions"])
 logger = logging.getLogger(__name__)
 
+# Bump this when the report schema changes (new sections/fields).
+# Any cached report with a different version is automatically regenerated.
+_REPORT_CACHE_VERSION = 2
+
 
 def _generate_report(rs: RacingSession, db: Session) -> dict:
     """Genera el reporte completo (secciones 0-11) para una RacingSession.
@@ -122,6 +126,7 @@ def _generate_report(rs: RacingSession, db: Session) -> dict:
         "pilot": pilot_name,
         "tyre_compound": laps[0].tyre_compound if laps else None,
         "tokens_used": tok_in + tok_out,
+        "_cache_version": _REPORT_CACHE_VERSION,
     }
     return report
 
@@ -460,7 +465,7 @@ def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_d
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-    if rs.report_cache:
+    if rs.report_cache and rs.report_cache.get("meta", {}).get("_cache_version") == _REPORT_CACHE_VERSION:
         return rs.report_cache
 
     report = _generate_report(rs, db)
@@ -480,7 +485,7 @@ def download_session_pdf(racing_session_id: uuid.UUID, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
     report = rs.report_cache
-    if not report:
+    if not report or report.get("meta", {}).get("_cache_version") != _REPORT_CACHE_VERSION:
         report = _generate_report(rs, db)
         rs.report_cache = report
         db.commit()
