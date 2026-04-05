@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { getIsTechnician } from '../lib/auth'
+import { getIsTechnician, getIsAdmin } from '../lib/auth'
 
 export default function TechNavLink() {
   const [isTech, setIsTech] = useState(false)
 
   useEffect(() => {
-    setIsTech(getIsTechnician())
+    setIsTech(getIsTechnician() || getIsAdmin())
   }, [])
 
   if (!isTech) return null

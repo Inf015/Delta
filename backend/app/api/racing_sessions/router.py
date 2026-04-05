@@ -39,6 +39,7 @@ from app.services.tracks.track_normalizer import normalize_track_id
 from app.utils.formatters import fmt_lap_time as _fmt
 
 router = APIRouter(prefix="/racing-sessions", tags=["racing-sessions"])
+logger = logging.getLogger(__name__)
 
 
 def _generate_report(rs: RacingSession, db: Session) -> dict:
@@ -596,10 +597,7 @@ async def upload_track_map(
         ti = TrackInfo(track_id=normalized, source="unknown", display_name=rs.track)
         db.add(ti)
     ti.map_path = str(map_path)
-    db.commit()
-
-    # Invalidar caché del reporte (map_path ahora existe, cambia has_map)
-    rs.report_cache = None
+    rs.report_cache = None  # invalidar caché (map_path ahora existe, cambia has_map)
     db.commit()
 
     return {"ok": True, "map_path": str(map_path), "track_id": normalized}
@@ -688,8 +686,8 @@ def compare_sessions(body: CompareRequest, db: Session = Depends(get_db), curren
     delta_s3 = (best_b.s3 or 0) - (best_a.s3 or 0)
     delta_total = best_b.lap_time - best_a.lap_time
 
-    meta_a = {"car": rs_a.car, "simulator": rs_a.simulator.value, "track": rs_a.track}
-    meta_b = {"car": rs_b.car, "simulator": rs_b.simulator.value, "track": rs_b.track}
+    meta_a = {"car": rs_a.car, "simulator": rs_a.simulator.value if rs_a.simulator else None, "track": rs_a.track}
+    meta_b = {"car": rs_b.car, "simulator": rs_b.simulator.value if rs_b.simulator else None, "track": rs_b.track}
 
     # Llamar Claude para comparación
     ai_comparison, cmp_tok_in, cmp_tok_out = claude_client.compare(

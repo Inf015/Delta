@@ -134,6 +134,7 @@ async def upload_csv(
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
     created_sessions: list[SessionOut] = []
+    committed_csv_paths: list[Path] = []  # para limpieza si la transacción falla
     skipped = 0
     duplicates = 0
     session_meta_filled = False  # solo auto-llenamos una vez
@@ -192,6 +193,7 @@ async def upload_csv(
         dest_path = dest_dir / f"{uuid.uuid4()}_{safe_name}"
         shutil.move(str(tmp), dest_path)
 
+        committed_csv_paths.append(dest_path)
         try:
             lap = TelemetrySession(
                 user_id=current_user.id,
@@ -224,8 +226,9 @@ async def upload_csv(
 
             process_session.delay(str(lap.id))
         except Exception:
-            # Si falla el DB, eliminar el CSV ya movido para evitar huérfanos
-            dest_path.unlink(missing_ok=True)
+            # Limpiar todos los CSVs movidos en este request (la transacción se revierte)
+            for p in committed_csv_paths:
+                p.unlink(missing_ok=True)
             raise
 
         created_sessions.append(SessionOut(
