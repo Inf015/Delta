@@ -201,6 +201,20 @@ _COL_ALIASES: dict[str, str] = {
     "loadrearright [n]": "load_rr",
     "loadfrontleft [n]": "load_fl",
     "loadfrontright [n]": "load_fr",
+    # Velocidad de suspensión (análisis de amortiguadores)
+    "suspensionvelocityrearleft [m/s]":   "susp_vel_rl",
+    "suspensionvelocityrearright [m/s]":  "susp_vel_rr",
+    "suspensionvelocityfrontleft [m/s]":  "susp_vel_fl",
+    "suspensionvelocityfrontright [m/s]": "susp_vel_fr",
+    # Aceleración de suspensión
+    "suspensionaccelerationrearleft [m/s^2]":   "susp_accel_rl",
+    "suspensionaccelerationrearright [m/s^2]":  "susp_accel_rr",
+    "suspensionaccelerationfrontleft [m/s^2]":  "susp_accel_fl",
+    "suspensionaccelerationfrontright [m/s^2]": "susp_accel_fr",
+    # Velocidad angular local (yaw rate, pitch rate, roll rate)
+    "localangularvelocityx [rad/s]": "ang_vel_x",
+    "localangularvelocityy [rad/s]": "ang_vel_y",
+    "localangularvelocityz [rad/s]": "ang_vel_z",
     # Orientación
     "yaw [rad]": "yaw",
     "roll [rad]": "roll",

@@ -225,6 +225,9 @@ export interface SessionReport {
     throttle_full_pct?: number
     rpm_max?: number
     fuel_used_per_lap?: number
+    brake_hard_pct?: number
+    handling?: string
+    weak_sector?: string
   }
   section_2_lap_table: LapRow[]
   section_3_consistency: {
@@ -238,15 +241,26 @@ export interface SessionReport {
     press?: Record<string, { avg: number; max: number; min: number }>
     camber_table?: Array<{ corner: string; inner?: number; mid?: number; outer?: number; diagnosis: string }>
     slip?: Record<string, { avg: number; max: number }>
+    wear?: Array<{ corner: string; avg_pct?: number; max_pct?: number; end_pct?: number }>
+    wear_diagnosis?: string[]
+    carcass?: Record<string, { avg: number; max: number }>
+    overheating_risk?: string[]
   }
   section_5_brakes: {
     temp?: Record<string, { avg: number; max: number }>
     balance?: { front_avg: number; rear_avg: number; bias: string }
     warning?: string
+    zones?: Array<{ dist_m: number; speed_kmh: number; intensity: number }>
   }
   section_6_dynamics: {
     g_forces?: Array<{ metric: string; value: string; interpretation: string }>
     suspension?: Array<{ corner: string; avg_mm: number; range_mm: number; min_mm: number; max_mm: number }>
+    ride_height?: { front_mm?: number; rear_mm?: number; rake_mm?: number; diagnosis?: string }
+    tyre_loads?: { front_pct?: number; rear_pct?: number; balance_diag?: string; FL?: Record<string, number>; FR?: Record<string, number>; RL?: Record<string, number>; RR?: Record<string, number> }
+    damper_analysis?: { diagnosis?: string; corners?: Record<string, { avg_ms: number; max_ms: number; p95_ms: number }> }
+    yaw_rate?: { avg_rads: number; max_rads: number; p95_rads: number }
+    lsd_analysis?: { accel_diff_avg?: number; accel_diff_max?: number; lsd_diagnosis?: string }
+    steering?: { avg_abs: number; max_abs: number; understeer_score: number; understeer_level: string }
   }
   section_7_setup: {
     has_setup_data: boolean

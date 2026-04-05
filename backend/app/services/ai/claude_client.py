@@ -37,6 +37,12 @@ Reglas:
 que el juego permita seleccionar (ej: presiones en incrementos de 0.1 PSI, \
 muelles en incrementos de 100 N/m, ARB en enteros). Nunca sugiereas valores \
 intermedios imposibles de seleccionar en el juego.
+- Cuando hay datos de ride_height: sugiere ajustes de altura/rake específicos en mm
+- Cuando hay tyre_wear diferencial: sugiere cambios de camber/toe para uniformizar desgaste
+- Cuando hay lsd_analysis: sugiere configuración de diferencial (coast/power locking)
+- Cuando hay susp_velocity/damper_diagnosis: sugiere ajustes de amortiguadores (bump/rebound)
+- Cuando hay tyre_loads desbalanceadas: sugiere cambios de distribución de peso o ARB
+- Siempre incluye el valor ACTUAL (del pre_análisis) y el valor SUGERIDO para cada ajuste de setup
 - Responde SIEMPRE con JSON válido, sin markdown, sin texto extra.
 """
 
@@ -162,8 +168,14 @@ def analyze(
     """
     client = _client()
 
+    _EXCLUDE = {"track", "car", "simulator"}
+    _ALWAYS_INCLUDE = {
+        "tyre_wear", "tyre_carcass", "ride_height", "tyre_loads",
+        "susp_velocity", "lsd_analysis", "steering", "yaw_rate",
+        "braking_zones", "handling",
+    }
     compact = {k: v for k, v in pre_analysis.items()
-               if k not in ("track", "car", "simulator")}
+               if k not in _EXCLUDE or k in _ALWAYS_INCLUDE}
 
     # Bloque de comparación vs mejor vuelta
     best_lap_block = ""
@@ -377,7 +389,13 @@ def analyze_session(
         if k not in ("theoretical_best_fmt", "best_s1_fmt", "best_s2_fmt", "best_s3_fmt",
                      "avg_lap_fmt", "worst_lap_fmt", "best_lap_fmt")
     }
-    compact_pre = {k: v for k, v in best_lap_pre.items() if k not in ("track", "car", "simulator")}
+    _SESSION_ALWAYS_INCLUDE = {
+        "tyre_wear", "tyre_carcass", "ride_height", "tyre_loads",
+        "susp_velocity", "lsd_analysis", "steering", "yaw_rate",
+        "braking_zones", "handling",
+    }
+    compact_pre = {k: v for k, v in best_lap_pre.items()
+                   if k not in ("track", "car", "simulator") or k in _SESSION_ALWAYS_INCLUDE}
 
     # Bloque de contexto del circuito
     track_block = ""

@@ -111,6 +111,14 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
     if fuel:
         summary["fuel_used_per_lap"] = fuel.get("used")
 
+    brake_data = best_pre.get("brake", {})
+    if brake_data:
+        summary["brake_hard_pct"] = brake_data.get("hard_pct")
+    if best_pre.get("handling"):
+        summary["handling"] = best_pre.get("handling")
+    if best_pre.get("weak_sector"):
+        summary["weak_sector"] = best_pre.get("weak_sector")
+
     # ── Sección 2: Tiempos por vuelta ─────────────────────────────────────────
     lap_table = []
     prev_time = None
@@ -203,6 +211,30 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
     if slip_data:
         tyre_analysis["slip"] = slip_data
 
+    tyre_wear_data = best_pre.get("tyre_wear", {})
+    if tyre_wear_data:
+        wear_table = []
+        labels_w = {"FL": "Del. Izq", "FR": "Del. Der", "RL": "Tras. Izq", "RR": "Tras. Der"}
+        for corner, label in labels_w.items():
+            w = tyre_wear_data.get(corner, {})
+            if w:
+                wear_table.append({
+                    "corner": label,
+                    "avg_pct": w.get("avg"),
+                    "max_pct": w.get("max"),
+                    "end_pct": w.get("end"),
+                })
+        if wear_table:
+            tyre_analysis["wear"] = wear_table
+        if "diagnosis" in tyre_wear_data:
+            tyre_analysis["wear_diagnosis"] = tyre_wear_data["diagnosis"]
+
+    tyre_carcass_data = best_pre.get("tyre_carcass", {})
+    if tyre_carcass_data:
+        tyre_analysis["carcass"] = {k: v for k, v in tyre_carcass_data.items() if k != "overheating_risk"}
+        if "overheating_risk" in tyre_carcass_data:
+            tyre_analysis["overheating_risk"] = tyre_carcass_data["overheating_risk"]
+
     # ── Sección 5: Análisis de frenos ─────────────────────────────────────────
     brake_temp    = best_pre.get("brake_temp", {})
     brake_balance = best_pre.get("brake_balance", {})
@@ -218,6 +250,10 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
                 f"({brake_balance.get('front_avg', 0):.0f}°C vs {brake_balance.get('rear_avg', 0):.0f}°C) "
                 f"— considera mover brake bias hacia atrás."
             )
+
+    braking_zones = best_pre.get("braking_zones", [])
+    if braking_zones:
+        brake_analysis["zones"] = braking_zones
 
     # ── Sección 6: G-Forces y dinámica ────────────────────────────────────────
     g_forces   = best_pre.get("g_forces", {})
@@ -245,6 +281,38 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
                     "max_mm": s.get("max"),
                 })
         dynamics["suspension"] = susp_table
+
+    ride_h = best_pre.get("ride_height", {})
+    if ride_h:
+        dynamics["ride_height"] = {
+            "front_mm": ride_h.get("front", {}).get("avg_mm"),
+            "rear_mm":  ride_h.get("rear", {}).get("avg_mm"),
+            "rake_mm":  ride_h.get("rake_mm"),
+            "diagnosis": ride_h.get("rake_diagnosis"),
+        }
+
+    loads_data = best_pre.get("tyre_loads", {})
+    if loads_data:
+        dynamics["tyre_loads"] = loads_data
+
+    susp_vel_data = best_pre.get("susp_velocity", {})
+    if susp_vel_data:
+        dynamics["damper_analysis"] = {
+            "diagnosis": susp_vel_data.get("damper_diagnosis"),
+            "corners": {c: susp_vel_data[c] for c in ("FL", "FR", "RL", "RR") if c in susp_vel_data},
+        }
+
+    yaw_data = best_pre.get("yaw_rate", {})
+    if yaw_data:
+        dynamics["yaw_rate"] = yaw_data
+
+    lsd_data = best_pre.get("lsd_analysis", {})
+    if lsd_data:
+        dynamics["lsd_analysis"] = lsd_data
+
+    steering_data = best_pre.get("steering", {})
+    if steering_data:
+        dynamics["steering"] = steering_data
 
     # ── Sección 7: Setup ──────────────────────────────────────────────────────
     setup_section: dict[str, Any] = {}

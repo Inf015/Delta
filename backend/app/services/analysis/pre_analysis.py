@@ -242,6 +242,194 @@ def compute(lap: ParsedLap) -> dict:
                 "used":  round(float(f_start - f_end), 2),
             }
 
+    # ── Dirección (análisis de subviraje por correlación steer vs G lat) ───────
+    steer_s = _series(df, "steer")
+    if steer_s is not None and g_lat is not None:
+        steer_vals = steer_s.reindex(df.index).fillna(0)
+        g_vals = g_lat.reindex(df.index).fillna(0)
+        # Subviraje: mucho steer con poca G lateral (piloto gira más de lo que el coche responde)
+        # Usamos solo zonas con steer > 20% y speed > 60 km/h
+        mask = (steer_vals.abs() > 20)
+        if "speed" in df.columns:
+            speed_s2 = pd.to_numeric(df["speed"], errors="coerce").fillna(0)
+            mask = mask & (speed_s2 > 60)
+        if mask.sum() > 20:
+            steer_filtered = steer_vals[mask]
+            g_filtered = g_vals[mask]
+            # Ratio g/steer: bajo ratio = subviraje
+            ratio = g_filtered.abs() / (steer_filtered.abs() + 0.001)
+            understeer_score = round(float(1.0 / (ratio.mean() + 0.01)), 2)  # alto = más subviraje
+            result["steering"] = {
+                "avg_abs": round(float(steer_vals.abs().mean()), 1),
+                "max_abs": round(float(steer_vals.abs().max()), 1),
+                "understeer_score": understeer_score,
+                "understeer_level": "high" if understeer_score > 0.3 else "medium" if understeer_score > 0.15 else "low",
+            }
+
+    # ── Desgaste de gomas ─────────────────────────────────────────────────────
+    tyre_wear: dict = {}
+    for corner in ("fl", "fr", "rl", "rr"):
+        s = _series(df, f"tyre_wear_{corner}")
+        if s is not None and len(s) > 10:
+            valid = s[(s >= 0) & (s <= 100)]
+            if not valid.empty:
+                tyre_wear[corner.upper()] = {
+                    "avg": round(float(valid.mean()), 2),
+                    "max": round(float(valid.max()), 2),
+                    "end": round(float(valid.iloc[-1]), 2),
+                }
+    if tyre_wear:
+        result["tyre_wear"] = tyre_wear
+        # Diagnóstico de desgaste diferencial
+        ends = {c: d["end"] for c, d in tyre_wear.items() if "end" in d}
+        if len(ends) == 4:
+            front_avg = (ends.get("FL", 0) + ends.get("FR", 0)) / 2
+            rear_avg  = (ends.get("RL", 0) + ends.get("RR", 0)) / 2
+            left_avg  = (ends.get("FL", 0) + ends.get("RL", 0)) / 2
+            right_avg = (ends.get("FR", 0) + ends.get("RR", 0)) / 2
+            diag: list[str] = []
+            if abs(front_avg - rear_avg) > 0.5:
+                diag.append("rear_heavy" if rear_avg > front_avg else "front_heavy")
+            if abs(left_avg - right_avg) > 0.5:
+                diag.append("left_heavy" if left_avg > right_avg else "right_heavy")
+            if diag:
+                result["tyre_wear"]["diagnosis"] = diag
+
+    # ── Ride Height (altura de carrocería) ────────────────────────────────────
+    ride_h: dict = {}
+    for side, col in (("front", "ride_height_f"), ("rear", "ride_height_r")):
+        s = _series(df, col)
+        if s is not None and len(s) > 10:
+            # Convertir m → mm
+            mm = s * 1000
+            valid = mm[mm > 0]
+            if not valid.empty:
+                ride_h[side] = {
+                    "avg_mm": round(float(valid.mean()), 1),
+                    "min_mm": round(float(valid.min()), 1),
+                    "max_mm": round(float(valid.max()), 1),
+                    "range_mm": round(float(valid.max() - valid.min()), 1),
+                }
+    if len(ride_h) == 2:
+        result["ride_height"] = ride_h
+        # Rake = rear - front (positivo = nose down = más agarre delantero)
+        rake = ride_h["rear"]["avg_mm"] - ride_h["front"]["avg_mm"]
+        result["ride_height"]["rake_mm"] = round(rake, 1)
+        result["ride_height"]["rake_diagnosis"] = (
+            "aggressive_front_aero" if rake < -5 else
+            "neutral" if abs(rake) <= 5 else
+            "rear_stability"
+        )
+
+    # ── Cargas en rueda (aero/mecánica) ───────────────────────────────────────
+    loads: dict = {}
+    for corner in ("fl", "fr", "rl", "rr"):
+        s = _series(df, f"load_{corner}")
+        if s is not None and len(s) > 10:
+            valid = s[s > 0]
+            if not valid.empty:
+                loads[corner.upper()] = {
+                    "avg_N": round(float(valid.mean()), 0),
+                    "max_N": round(float(valid.max()), 0),
+                    "min_N": round(float(valid.min()), 0),
+                }
+    if loads:
+        result["tyre_loads"] = loads
+        if len(loads) == 4:
+            front_load = (loads.get("FL", {}).get("avg_N", 0) + loads.get("FR", {}).get("avg_N", 0)) / 2
+            rear_load  = (loads.get("RL", {}).get("avg_N", 0) + loads.get("RR", {}).get("avg_N", 0)) / 2
+            if front_load > 0 and rear_load > 0:
+                total = front_load + rear_load
+                result["tyre_loads"]["front_pct"] = round(front_load / total * 100, 1)
+                result["tyre_loads"]["rear_pct"]  = round(rear_load  / total * 100, 1)
+                result["tyre_loads"]["balance_diag"] = (
+                    "front_heavy" if result["tyre_loads"]["front_pct"] > 55 else
+                    "rear_heavy"  if result["tyre_loads"]["rear_pct"]  > 55 else
+                    "balanced"
+                )
+
+    # ── Velocidad de suspensión (análisis de amortiguadores) ─────────────────
+    susp_vel: dict = {}
+    for corner in ("fl", "fr", "rl", "rr"):
+        s = _series(df, f"susp_vel_{corner}")
+        if s is not None and len(s) > 10:
+            abs_vel = s.abs()
+            susp_vel[corner.upper()] = {
+                "avg_ms":  round(float(abs_vel.mean()), 3),
+                "max_ms":  round(float(abs_vel.max()), 3),
+                "p95_ms":  round(float(abs_vel.quantile(0.95)), 3),
+            }
+    if susp_vel:
+        result["susp_velocity"] = susp_vel
+        # Diagnóstico de amortiguación
+        all_p95 = [v["p95_ms"] for v in susp_vel.values()]
+        avg_p95 = sum(all_p95) / len(all_p95)
+        result["susp_velocity"]["damper_diagnosis"] = (
+            "overdamped"   if avg_p95 < 0.05 else
+            "well_damped"  if avg_p95 < 0.15 else
+            "underdamped"  if avg_p95 < 0.30 else
+            "very_soft"
+        )
+
+    # ── Temperatura de carcasa de goma ────────────────────────────────────────
+    tyre_carcass: dict = {}
+    for corner in ("fl", "fr", "rl", "rr"):
+        s = _series(df, f"tyre_carcass_{corner}")
+        if s is not None:
+            hot = s[s > 20]
+            if not hot.empty:
+                tyre_carcass[corner.upper()] = {
+                    "avg": round(float(hot.mean()), 1),
+                    "max": round(float(hot.max()), 1),
+                }
+    if tyre_carcass:
+        result["tyre_carcass"] = tyre_carcass
+        # Comparar carcasa vs superficie para detectar overheating interno
+        overheated = []
+        for c in ("FL", "FR", "RL", "RR"):
+            surf = result.get("tyre_temp", {}).get(c, {}).get("avg", 0)
+            carc = tyre_carcass.get(c, {}).get("avg", 0)
+            if surf > 0 and carc > 0 and carc > surf * 0.95:
+                overheated.append(c)
+        if overheated:
+            result["tyre_carcass"]["overheating_risk"] = overheated
+
+    # ── Yaw rate (rotación del vehículo — detecta inestabilidad) ─────────────
+    yaw_s = _series(df, "ang_vel_z")  # Z = yaw en coordenadas del vehículo
+    if yaw_s is not None and len(yaw_s) > 10:
+        yaw_abs = yaw_s.abs()
+        result["yaw_rate"] = {
+            "avg_rads":  round(float(yaw_abs.mean()), 3),
+            "max_rads":  round(float(yaw_abs.max()), 3),
+            "p95_rads":  round(float(yaw_abs.quantile(0.95)), 3),
+        }
+
+    # ── Diferencial de velocidad de ruedas (LSD / tracción) ──────────────────
+    ws_rl = _series(df, "wheel_speed_rl")
+    ws_rr = _series(df, "wheel_speed_rr")
+    ws_fl = _series(df, "wheel_speed_fl")
+    ws_fr = _series(df, "wheel_speed_fr")
+    if ws_rl is not None and ws_rr is not None:
+        # Alinear índices
+        common = ws_rl.index.intersection(ws_rr.index)
+        if len(common) > 20:
+            rear_diff = (ws_rl.loc[common] - ws_rr.loc[common]).abs()
+            # Solo en zonas de aceleración (throttle > 50%)
+            lsd_diag = {}
+            if thr is not None:
+                thr_aligned = thr.reindex(common).fillna(0)
+                accel_mask = thr_aligned > 50
+                if accel_mask.sum() > 10:
+                    accel_diff = rear_diff[accel_mask]
+                    lsd_diag["accel_diff_avg"] = round(float(accel_diff.mean()), 2)
+                    lsd_diag["accel_diff_max"] = round(float(accel_diff.max()), 2)
+                    lsd_diag["lsd_diagnosis"] = (
+                        "open_diff"      if lsd_diag["accel_diff_avg"] > 15 else
+                        "light_locking"  if lsd_diag["accel_diff_avg"] > 5  else
+                        "well_locked"
+                    )
+            result["lsd_analysis"] = lsd_diag
+
     # ── Sector más débil ──────────────────────────────────────────────────────
     if m.s1 and m.s2 and m.s3 and m.s1 > 0 and m.s2 > 0 and m.s3 > 0:
         # Validar que los sectores sumen aproximadamente el tiempo de vuelta

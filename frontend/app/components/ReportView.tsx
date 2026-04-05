@@ -191,6 +191,9 @@ function Section1({ s }: { s: SessionReport['section_1_summary'] }) {
         <MetricRow label="Tiempo teórico óptimo" value={`${s.theoretical_best_fmt} (−${s.potential_gain.toFixed(3)}s potencial)`} />
         {s.fuel_used_per_lap && <MetricRow label="Combustible usado" value={`${s.fuel_used_per_lap} l/vuelta aprox.`} />}
         {s.rpm_max && <MetricRow label="RPM máximo" value={`${s.rpm_max} rpm`} />}
+        {s.brake_hard_pct != null && <MetricRow label="Frenada intensa (>80%)" value={`${s.brake_hard_pct}% del tiempo`} />}
+        {s.handling && <MetricRow label="Comportamiento" value={s.handling} />}
+        {s.weak_sector && <MetricRow label="Sector más débil" value={s.weak_sector} />}
       </tbody></table>
     </div>
   )
@@ -311,6 +314,46 @@ function Section4({ s }: { s: SessionReport['section_4_tyres'] }) {
           />
         </div>
       )}
+      {s.wear && s.wear.length > 0 && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Desgaste de gomas:</p>
+          <TwoColTable
+            headers={['Rueda', 'Desgaste med.', 'Desgaste máx.', 'Al final']}
+            rows={s.wear.map(r => [
+              { value: r.corner },
+              { value: r.avg_pct != null ? `${r.avg_pct}%` : '—' },
+              { value: r.max_pct != null ? `${r.max_pct}%` : '—' },
+              { value: r.end_pct != null ? `${r.end_pct}%` : '—' },
+            ])}
+          />
+          {s.wear_diagnosis && s.wear_diagnosis.length > 0 && (
+            <p className="text-yellow-500 text-xs border border-yellow-900/50 px-3 py-2 mt-2">
+              Desgaste diferencial: {s.wear_diagnosis.join(', ')}
+            </p>
+          )}
+        </div>
+      )}
+      {s.overheating_risk && s.overheating_risk.length > 0 && (
+        <p className="text-red-400 text-sm border border-red-900/50 px-3 py-2">
+          Riesgo de sobrecalentamiento interno: {s.overheating_risk.join(', ')}
+        </p>
+      )}
+      {s.carcass && Object.keys(s.carcass).length > 0 && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Temperatura de carcasa:</p>
+          <TwoColTable
+            headers={['Rueda', 'Prom (°C)', 'Máx (°C)']}
+            rows={Object.entries(s.carcass).map(([corner, data]: [string, unknown]) => {
+              const d = data as { avg?: number; max?: number }
+              return [
+                { value: corner },
+                { value: d.avg != null ? String(d.avg) : '—', color: typeof d.avg === 'number' ? tyreColor(d.avg) : undefined },
+                { value: d.max != null ? String(d.max) : '—', color: typeof d.max === 'number' ? tyreColor(d.max) : undefined },
+              ]
+            })}
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -331,6 +374,19 @@ function Section5({ s }: { s: SessionReport['section_5_brakes'] }) {
         </div>
       )}
       {s.warning && <p className="text-yellow-500 text-sm border border-yellow-900/50 px-3 py-2">• {s.warning}</p>}
+      {s.zones && s.zones.length > 0 && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Zonas de frenada detectadas:</p>
+          <TwoColTable
+            headers={['Punto (m)', 'Velocidad (km/h)', 'Intensidad (%)']}
+            rows={s.zones.map(z => [
+              { value: String(z.dist_m) },
+              { value: String(z.speed_kmh) },
+              { value: String(z.intensity), color: z.intensity > 90 ? '#ef4444' : z.intensity > 70 ? '#f97316' : '#22c55e' },
+            ])}
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -354,6 +410,117 @@ function Section6({ s }: { s: SessionReport['section_6_dynamics'] }) {
               { value: String(r.min_mm) }, { value: String(r.max_mm) },
             ])}
           />
+        </div>
+      )}
+      {s.ride_height && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Altura de carrocería (Ride Height):</p>
+          <TwoColTable
+            headers={['Eje', 'Altura promedio (mm)', 'Diagnóstico']}
+            rows={[
+              [{ value: 'Delantera' }, { value: s.ride_height.front_mm != null ? `${s.ride_height.front_mm} mm` : '—' }, { value: '' }],
+              [{ value: 'Trasera' }, { value: s.ride_height.rear_mm != null ? `${s.ride_height.rear_mm} mm` : '—' }, { value: '' }],
+              [{ value: 'Rake (Tras − Del)' }, { value: s.ride_height.rake_mm != null ? `${s.ride_height.rake_mm} mm` : '—' }, { value: s.ride_height.diagnosis ?? '—', color: s.ride_height.diagnosis === 'neutral' ? '#22c55e' : '#f97316' }],
+            ]}
+          />
+        </div>
+      )}
+      {s.tyre_loads && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Cargas en rueda:</p>
+          <div className="text-xs space-y-1 border border-gray-800 p-3">
+            {s.tyre_loads.front_pct != null && s.tyre_loads.rear_pct != null && (
+              <div className="flex items-center gap-3">
+                <span className="text-gray-500 w-20 shrink-0">Delantera:</span>
+                <div className="flex-1 bg-gray-900 h-3 relative">
+                  <div className="absolute left-0 top-0 h-full bg-blue-600" style={{ width: `${s.tyre_loads.front_pct}%` }} />
+                </div>
+                <span className="text-white font-mono w-12 text-right">{s.tyre_loads.front_pct}%</span>
+              </div>
+            )}
+            {s.tyre_loads.rear_pct != null && (
+              <div className="flex items-center gap-3">
+                <span className="text-gray-500 w-20 shrink-0">Trasera:</span>
+                <div className="flex-1 bg-gray-900 h-3 relative">
+                  <div className="absolute left-0 top-0 h-full bg-orange-500" style={{ width: `${s.tyre_loads.rear_pct}%` }} />
+                </div>
+                <span className="text-white font-mono w-12 text-right">{s.tyre_loads.rear_pct}%</span>
+              </div>
+            )}
+            {s.tyre_loads.balance_diag && (
+              <p className="text-gray-400 mt-1">Balance: <span className={s.tyre_loads.balance_diag === 'balanced' ? 'text-green-400' : 'text-yellow-400'}>{s.tyre_loads.balance_diag}</span></p>
+            )}
+          </div>
+        </div>
+      )}
+      {s.damper_analysis && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Análisis de amortiguadores:</p>
+          {s.damper_analysis.diagnosis && (
+            <p className="text-sm mb-2">Diagnóstico: <span className={s.damper_analysis.diagnosis === 'well_damped' ? 'text-green-400' : 'text-yellow-400'}>{s.damper_analysis.diagnosis}</span></p>
+          )}
+          {s.damper_analysis.corners && Object.keys(s.damper_analysis.corners).length > 0 && (
+            <TwoColTable
+              headers={['Rueda', 'Vel. med. (m/s)', 'Vel. máx. (m/s)', 'P95 (m/s)']}
+              rows={Object.entries(s.damper_analysis.corners).map(([corner, data]: [string, unknown]) => {
+                const d = data as { avg_ms?: number; max_ms?: number; p95_ms?: number }
+                return [
+                  { value: corner },
+                  { value: d.avg_ms != null ? String(d.avg_ms) : '—' },
+                  { value: d.max_ms != null ? String(d.max_ms) : '—' },
+                  { value: d.p95_ms != null ? String(d.p95_ms) : '—' },
+                ]
+              })}
+            />
+          )}
+        </div>
+      )}
+      {s.yaw_rate && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Yaw Rate (rotación del vehículo):</p>
+          <TwoColTable
+            headers={['Métrica', 'Valor']}
+            rows={[
+              [{ value: 'Promedio (rad/s)' }, { value: String(s.yaw_rate.avg_rads ?? '—') }],
+              [{ value: 'Máximo (rad/s)' }, { value: String(s.yaw_rate.max_rads ?? '—') }],
+              [{ value: 'P95 (rad/s)' }, { value: String(s.yaw_rate.p95_rads ?? '—') }],
+            ]}
+          />
+        </div>
+      )}
+      {s.lsd_analysis && Object.keys(s.lsd_analysis).length > 0 && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">LSD / Diferencial:</p>
+          <div className="border border-gray-800 p-3 text-sm space-y-1">
+            {s.lsd_analysis.lsd_diagnosis && (
+              <p>Diagnóstico: <span className={s.lsd_analysis.lsd_diagnosis === 'well_locked' ? 'text-green-400' : s.lsd_analysis.lsd_diagnosis === 'light_locking' ? 'text-yellow-400' : 'text-red-400'}>{s.lsd_analysis.lsd_diagnosis}</span></p>
+            )}
+            {s.lsd_analysis.accel_diff_avg != null && (
+              <p className="text-gray-400 text-xs">Diferencia trasera en aceleración (prom): <span className="text-white font-mono">{s.lsd_analysis.accel_diff_avg} km/h</span></p>
+            )}
+            {s.lsd_analysis.accel_diff_max != null && (
+              <p className="text-gray-400 text-xs">Diferencia trasera en aceleración (máx): <span className="text-white font-mono">{s.lsd_analysis.accel_diff_max} km/h</span></p>
+            )}
+          </div>
+        </div>
+      )}
+      {s.steering && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Dirección (análisis de subviraje):</p>
+          <div className="border border-gray-800 p-3 text-sm space-y-1">
+            {s.steering.understeer_level && (
+              <p>Nivel de subviraje: <span className={s.steering.understeer_level === 'low' ? 'text-green-400' : s.steering.understeer_level === 'medium' ? 'text-yellow-400' : 'text-red-400'}>{s.steering.understeer_level}</span></p>
+            )}
+            {s.steering.understeer_score != null && (
+              <p className="text-gray-400 text-xs">Score: <span className="text-white font-mono">{s.steering.understeer_score}</span></p>
+            )}
+            {s.steering.avg_abs != null && (
+              <p className="text-gray-400 text-xs">Steer promedio: <span className="text-white font-mono">{s.steering.avg_abs}%</span></p>
+            )}
+            {s.steering.max_abs != null && (
+              <p className="text-gray-400 text-xs">Steer máximo: <span className="text-white font-mono">{s.steering.max_abs}%</span></p>
+            )}
+          </div>
         </div>
       )}
     </div>
