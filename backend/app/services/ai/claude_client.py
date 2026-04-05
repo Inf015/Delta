@@ -475,13 +475,20 @@ def analyze_session(
 
     message = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=3000,
+        max_tokens=5000,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
 
     if not message.content or not hasattr(message.content[0], "text"):
         raise RuntimeError("Claude devolvió respuesta vacía en analyze_session")
+
+    if message.stop_reason == "max_tokens":
+        logging.getLogger(__name__).warning(
+            "analyze_session alcanzó max_tokens (%d out) — respuesta posiblemente truncada",
+            message.usage.output_tokens,
+        )
+
     raw = message.content[0].text.strip()
     if "```" in raw:
         lines = raw.split("\n")
