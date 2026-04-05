@@ -249,7 +249,12 @@ async def upload_csv(
             racing_session_id=rs.id,
         ))
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        for p in committed_csv_paths:
+            p.unlink(missing_ok=True)
+        raise
 
     if not created_sessions:
         if duplicates > 0:

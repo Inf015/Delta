@@ -61,6 +61,8 @@ class SessionSummary(BaseModel):
     name: str | None
     track: str | None
     car: str | None
+    simulator: str | None
+    session_type: str | None
     session_date: str | None
     lap_count: int
     best_lap_fmt: str
@@ -97,6 +99,8 @@ def _sessions_for_pilot(db: Session, pilot: User) -> list[dict]:
             "name": rs.name,
             "track": rs.track,
             "car": rs.car,
+            "simulator": rs.simulator.value if rs.simulator else None,
+            "session_type": rs.session_type.value if rs.session_type else None,
             "session_date": rs.session_date,
             "lap_count": lap_count or 0,
             "best_lap_fmt": _fmt(best_lap) if best_lap else "—",
@@ -130,22 +134,25 @@ def get_my_team(
     db: Session = Depends(get_db),
 ) -> Any:
     team = _get_my_team(db, current_user.id)
-    members = (
-        db.query(TeamMember, User)
-        .join(User, User.id == TeamMember.user_id)
+    # Single query: members + user info + session count per pilot
+    rows = (
+        db.query(User, func.count(RacingSession.id).label("rs_count"))
+        .join(TeamMember, TeamMember.user_id == User.id)
+        .outerjoin(RacingSession, RacingSession.user_id == User.id)
         .filter(TeamMember.team_id == team.id)
+        .group_by(User.id)
         .all()
     )
-    pilots = []
-    for _, pilot in members:
-        rs_count = db.query(RacingSession).filter(RacingSession.user_id == pilot.id).count()
-        pilots.append({
+    pilots = [
+        {
             "id": str(pilot.id),
             "email": pilot.email,
             "name": pilot.name or "",
             "plan": pilot.plan.value,
-            "racing_sessions": rs_count,
-        })
+            "racing_sessions": rs_count or 0,
+        }
+        for pilot, rs_count in rows
+    ]
     return {"id": str(team.id), "name": team.name, "owner_id": str(team.owner_id), "pilots": pilots}
 
 

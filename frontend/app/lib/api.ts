@@ -351,6 +351,8 @@ export interface TeamSession {
   name: string | null
   track: string | null
   car: string | null
+  simulator: string | null
+  session_type: string | null
   session_date: string | null
   lap_count: number
   best_lap_fmt: string

@@ -261,9 +261,8 @@ export default function TechnicianPage() {
                   {filteredSessions.map((s, i) => {
                     const colorIdx = pilotColorMap[s.pilot_email] ?? 0
                     const pColor = pilotColor(colorIdx)
-                    const sc = simColor((s as TeamSession & { simulator?: string }).simulator)
-                    const st = (s as TeamSession & { session_type?: string }).session_type
-                    const typeStyle = st ? (SESSION_TYPE_STYLES[st] ?? null) : null
+                    const sc = simColor(s.simulator)
+                    const typeStyle = s.session_type ? (SESSION_TYPE_STYLES[s.session_type] ?? null) : null
 
                     return (
                       <tr
@@ -289,12 +288,12 @@ export default function TechnicianPage() {
                         <td className="px-4 py-3 text-gray-400 text-xs">{s.car || '—'}</td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-1">
-                            {(s as TeamSession & { simulator?: string }).simulator && (
+                            {s.simulator && (
                               <span
                                 className="text-xs px-1.5 py-0.5 border font-medium"
                                 style={{ color: sc, borderColor: sc, backgroundColor: `${sc}15` }}
                               >
-                                {(s as TeamSession & { simulator?: string }).simulator}
+                                {s.simulator}
                               </span>
                             )}
                             {typeStyle && (

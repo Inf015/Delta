@@ -205,6 +205,8 @@ def analyze(
         messages=[{"role": "user", "content": prompt}],
     )
 
+    if not message.content or not hasattr(message.content[0], "text"):
+        raise RuntimeError("Claude devolvió respuesta vacía o sin texto")
     raw = message.content[0].text.strip()
 
     # Quitar code fences si Claude los añadió (```json ... ```)
@@ -290,6 +292,8 @@ def get_track_info_from_claude(track_id: str, track_length_m: float | None = Non
         messages=[{"role": "user", "content": prompt}],
     )
 
+    if not message.content or not hasattr(message.content[0], "text"):
+        raise RuntimeError("Claude devolvió respuesta vacía en get_track_info")
     raw = message.content[0].text.strip()
     if "```" in raw:
         lines = raw.split("\n")
@@ -464,6 +468,8 @@ def analyze_session(
         messages=[{"role": "user", "content": prompt}],
     )
 
+    if not message.content or not hasattr(message.content[0], "text"):
+        raise RuntimeError("Claude devolvió respuesta vacía en analyze_session")
     raw = message.content[0].text.strip()
     if "```" in raw:
         lines = raw.split("\n")
@@ -553,6 +559,8 @@ def compare(
         messages=[{"role": "user", "content": prompt}],
     )
 
+    if not message.content or not hasattr(message.content[0], "text"):
+        raise RuntimeError("Claude devolvió respuesta vacía en compare")
     raw = message.content[0].text.strip()
 
     if "```" in raw:

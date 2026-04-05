@@ -335,8 +335,6 @@ def update_racing_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.models.session import Simulator, SessionType
-
     rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
@@ -378,8 +376,16 @@ def delete_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(ge
     rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    db.delete(rs)  # cascade elimina TelemetrySessions por el modelo
+
+    # Recopilar paths de CSV antes de borrar para limpiar el disco
+    laps = db.query(TelemetrySession).filter_by(racing_session_id=racing_session_id).all()
+    csv_paths = [Path(l.csv_path) for l in laps if l.csv_path]
+
+    db.delete(rs)  # cascade elimina TelemetrySessions y sus Analysis
     db.commit()
+
+    for p in csv_paths:
+        p.unlink(missing_ok=True)
 
 
 @router.get("/", response_model=list[RacingSessionOut])
@@ -409,7 +415,7 @@ def get_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(get_d
     laps = (
         db.query(TelemetrySession)
         .filter_by(racing_session_id=racing_session_id)
-        .order_by(TelemetrySession.lap_time)
+        .order_by(TelemetrySession.lap_number)
         .all()
     )
 
