@@ -11,11 +11,48 @@ import DeleteButton from './DeleteButton'
 import DeltaMap from './DeltaMap'
 import TelemetryPanel from './TelemetryPanel'
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 function fmtTime(s: number) {
   const m = Math.floor(s / 60)
   const rem = s - m * 60
   return `${m}:${rem.toFixed(3).padStart(6, '0')}`
 }
+
+function trackInitials(track: string | null) {
+  if (!track) return '???'
+  const words = track.trim().split(/\s+/)
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase()
+  return words.slice(0, 3).map((w) => w[0]).join('').toUpperCase()
+}
+
+const SIM_COLORS: Record<string, string> = {
+  'assetto corsa': '#3b82f6',
+  'ac':            '#3b82f6',
+  'acc':           '#06b6d4',
+  'assetto corsa competizione': '#06b6d4',
+  'iracing':       '#f97316',
+  'rfactor2':      '#22c55e',
+  'rfactor 2':     '#22c55e',
+  'ams2':          '#a855f7',
+  'automobilista 2': '#a855f7',
+  'lmu':           '#eab308',
+  'le mans ultimate': '#eab308',
+}
+
+function simColor(sim: string | null) {
+  if (!sim) return '#4b5563'
+  return SIM_COLORS[sim.toLowerCase()] ?? '#4b5563'
+}
+
+const SESSION_TYPE_STYLES: Record<string, { label: string; cls: string }> = {
+  practice:   { label: 'Práctica',      cls: 'bg-gray-800 text-gray-300 border-gray-700' },
+  qualifying: { label: 'Clasificación', cls: 'bg-yellow-950 text-yellow-400 border-yellow-900' },
+  race:       { label: 'Carrera',       cls: 'bg-red-950 text-red-400 border-red-900' },
+  hotlap:     { label: 'Hot Lap',       cls: 'bg-purple-950 text-purple-400 border-purple-900' },
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function RacingSessionPage() {
   const params = useParams()
@@ -34,8 +71,6 @@ export default function RacingSessionPage() {
       if (cancelled) return
       setSession(s)
       setLoading(false)
-
-      // Auto-refresh mientras haya vueltas pendientes de procesar
       const hasPending = s && s.laps.some((l: { processed: boolean }) => !l.processed)
       if (hasPending) {
         timer = setTimeout(fetchAndSchedule, 5000)
@@ -43,10 +78,7 @@ export default function RacingSessionPage() {
     }
 
     fetchAndSchedule()
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [id])
 
   if (loading) {
@@ -58,6 +90,11 @@ export default function RacingSessionPage() {
   }
 
   const bestTime = session.laps.length > 0 ? Math.min(...session.laps.map((l) => l.lap_time)) : null
+  const color = simColor(session.simulator)
+  const initials = trackInitials(session.track)
+  const typeStyle = session.session_type
+    ? (SESSION_TYPE_STYLES[session.session_type] ?? { label: session.session_type, cls: 'bg-gray-800 text-gray-300 border-gray-700' })
+    : null
 
   return (
     <div>
@@ -66,33 +103,75 @@ export default function RacingSessionPage() {
           <strong>Error al subir vueltas:</strong> {uploadError}. Usa el botón de abajo para reintentar.
         </div>
       )}
-      {/* Header */}
-      <div className="flex items-start justify-between mb-8">
-        <div>
-          <Link href="/" className="text-gray-500 text-xs hover:text-white mb-2 inline-block">
-            ← Sesiones
-          </Link>
-          <h1 className="text-2xl font-bold text-white">{session.track || session.name || 'Sesión sin título'}</h1>
-          <p className="text-gray-400 text-sm mt-1">
-            {session.car || '—'} · {session.simulator || '—'} · {session.session_date || 'Sin fecha'}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {session.laps.length > 0 && (
-            <Link
-              href={`/racing-sessions/${session.id}/report`}
-              className="bg-f1red hover:bg-red-700 text-white px-4 py-2 text-sm font-bold transition-colors"
-            >
-              Ver Reporte
+
+      {/* Header con acento de color y decoración */}
+      <div
+        className="border border-gray-800 mb-8 relative overflow-hidden"
+        style={{ borderLeftColor: color, borderLeftWidth: 4 }}
+      >
+        {/* Iniciales decorativas */}
+        <span
+          className="absolute right-6 top-1/2 -translate-y-1/2 text-8xl font-black tracking-tighter pointer-events-none select-none"
+          style={{ color: 'rgba(255,255,255,0.035)' }}
+          aria-hidden
+        >
+          {initials}
+        </span>
+
+        <div className="flex items-start justify-between px-6 py-5 relative">
+          <div>
+            <Link href="/" className="text-gray-500 text-xs hover:text-white mb-3 inline-block transition-colors">
+              ← Sesiones
             </Link>
-          )}
-          <Link
-            href={`/compare?a=${session.id}`}
-            className="border border-gray-700 hover:border-f1red text-gray-400 hover:text-f1red px-4 py-2 text-sm transition-colors"
-          >
-            Comparar
-          </Link>
-          <DeleteButton sessionId={session.id} />
+            <h1 className="text-2xl font-bold text-white">
+              {session.track || session.name || 'Sesión sin título'}
+            </h1>
+            {session.name && session.track && (
+              <p className="text-gray-500 text-sm mt-0.5">{session.name}</p>
+            )}
+            <div className="flex flex-wrap items-center gap-2 mt-3">
+              {session.car && (
+                <span className="text-sm text-gray-300 font-medium">{session.car}</span>
+              )}
+              {session.car && session.simulator && (
+                <span className="text-gray-700">·</span>
+              )}
+              {session.simulator && (
+                <span
+                  className="text-xs px-2 py-0.5 border font-medium"
+                  style={{ color, borderColor: color, backgroundColor: `${color}15` }}
+                >
+                  {session.simulator}
+                </span>
+              )}
+              {typeStyle && (
+                <span className={`text-xs px-2 py-0.5 border ${typeStyle.cls}`}>
+                  {typeStyle.label}
+                </span>
+              )}
+              {session.session_date && (
+                <span className="text-xs text-gray-600">{session.session_date}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-2 flex-shrink-0 mt-6">
+            {session.laps.length > 0 && (
+              <Link
+                href={`/racing-sessions/${session.id}/report`}
+                className="bg-f1red hover:bg-red-700 text-white px-4 py-2 text-sm font-bold transition-colors"
+              >
+                Ver Reporte
+              </Link>
+            )}
+            <Link
+              href={`/compare?a=${session.id}`}
+              className="border border-gray-700 hover:border-f1red text-gray-400 hover:text-f1red px-4 py-2 text-sm transition-colors"
+            >
+              Comparar
+            </Link>
+            <DeleteButton sessionId={session.id} />
+          </div>
         </div>
       </div>
 
@@ -104,13 +183,22 @@ export default function RacingSessionPage() {
         </div>
         <div className="border border-gray-800 p-4">
           <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">Mejor vuelta</p>
-          <p className="text-2xl font-bold text-green-400">
+          <p
+            className="text-2xl font-bold text-green-400"
+            style={bestTime ? { textShadow: '0 0 16px rgba(74,222,128,0.5)' } : undefined}
+          >
             {bestTime ? fmtTime(bestTime) : '—'}
           </p>
         </div>
         <div className="border border-gray-800 p-4">
           <p className="text-gray-500 text-xs uppercase tracking-wide mb-1">Tipo</p>
-          <p className="text-2xl font-bold text-white">{session.session_type}</p>
+          {typeStyle ? (
+            <span className={`inline-block text-sm font-bold px-2 py-0.5 border ${typeStyle.cls}`}>
+              {typeStyle.label}
+            </span>
+          ) : (
+            <p className="text-2xl font-bold text-white">{session.session_type || '—'}</p>
+          )}
         </div>
       </div>
 
@@ -144,6 +232,7 @@ export default function RacingSessionPage() {
             <tbody>
               {session.laps.map((lap, i) => {
                 const isBest = bestTime !== null && Math.abs(lap.lap_time - bestTime) < 0.001
+                const delta = bestTime !== null && !isBest ? lap.lap_time - bestTime : null
                 return (
                   <tr
                     key={lap.session_id}
@@ -152,15 +241,27 @@ export default function RacingSessionPage() {
                     }`}
                   >
                     <td className="px-4 py-3 text-gray-400">
-                      #{lap.lap_number}
-                      {isBest && <span className="ml-2 text-xs text-green-400 font-bold">MEJOR</span>}
+                      <span className="font-mono">#{lap.lap_number}</span>
+                      {isBest && (
+                        <span className="ml-2 text-xs text-green-400 font-bold">MEJOR</span>
+                      )}
                     </td>
-                    <td className={`px-4 py-3 text-right font-bold ${isBest ? 'text-green-400' : 'text-white'}`}>
-                      {lap.lap_time_fmt}
+                    <td className="px-4 py-3 text-right">
+                      <span
+                        className={`font-bold font-mono ${isBest ? 'text-green-400' : 'text-white'}`}
+                        style={isBest ? { textShadow: '0 0 10px rgba(74,222,128,0.4)' } : undefined}
+                      >
+                        {lap.lap_time_fmt}
+                      </span>
+                      {delta !== null && (
+                        <span className="ml-2 text-xs text-orange-400 font-mono">
+                          +{delta.toFixed(3)}
+                        </span>
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-right text-gray-400">{lap.s1.toFixed(3)}</td>
-                    <td className="px-4 py-3 text-right text-gray-400">{lap.s2.toFixed(3)}</td>
-                    <td className="px-4 py-3 text-right text-gray-400">{lap.s3.toFixed(3)}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 font-mono text-xs">{lap.s1.toFixed(3)}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 font-mono text-xs">{lap.s2.toFixed(3)}</td>
+                    <td className="px-4 py-3 text-right text-gray-400 font-mono text-xs">{lap.s3.toFixed(3)}</td>
                     <td className="px-4 py-3 text-gray-500 text-xs">{lap.tyre_compound || '—'}</td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex flex-col items-center gap-1">
@@ -169,8 +270,8 @@ export default function RacingSessionPage() {
                             INVÁLIDA
                           </span>
                         ) : (
-                          <span className={`text-xs px-2 py-0.5 ${lap.processed ? 'bg-green-900 text-green-400' : 'bg-gray-800 text-gray-500'}`}>
-                            {lap.processed ? 'Listo' : 'Procesando'}
+                          <span className={`text-xs px-2 py-0.5 ${lap.processed ? 'bg-green-900/40 text-green-400' : 'bg-gray-800 text-gray-500'}`}>
+                            {lap.processed ? 'Listo' : 'Procesando…'}
                           </span>
                         )}
                         {lap.incidents && lap.incidents.length > 0 && (
