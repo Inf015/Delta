@@ -109,11 +109,23 @@ def _build_profile_summary(profile: KnowledgeProfile | None, prev_recs: list | N
         f"Mejor vuelta histórica: {_fmt(profile.best_lap)}",
         f"Promedio histórico: {_fmt(profile.avg_lap)}",
     ]
-    if profile.weak_sector:
-        lines.append(f"Sector débil recurrente: {profile.weak_sector}")
+    # Sector débil con desglose de frecuencia
+    cp = profile.corner_profiles or {}
+    sector_counts: dict = cp.get("sector_counts", {})
+    total_sc = sum(sector_counts.values())
+    if profile.weak_sector and total_sc > 0:
+        sc_detail = ", ".join(
+            f"{s}: {sector_counts.get(s, 0)}/{total_sc}"
+            for s in ("S1", "S2", "S3")
+            if sector_counts.get(s, 0) > 0
+        )
+        lines.append(f"Sector débil histórico: {profile.weak_sector} ({sc_detail} sesiones)")
+    elif profile.weak_sector:
+        lines.append(f"Sector débil: {profile.weak_sector}")
+
     if profile.trend != 0:
         direction = "mejorando" if profile.trend > 0 else "empeorando"
-        lines.append(f"Tendencia: {direction} ({profile.trend:+.3f}s/sesión)")
+        lines.append(f"Tendencia (regresión lineal): {direction} ({profile.trend:+.3f}s/sesión)")
     if profile.corner_profiles and profile.corner_profiles.get("latest"):
         latest = profile.corner_profiles["latest"]
         if latest.get("handling"):

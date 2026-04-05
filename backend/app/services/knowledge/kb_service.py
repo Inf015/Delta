@@ -75,20 +75,43 @@ def update_profile(
     else:
         profile.avg_lap = (profile.avg_lap * prev_count + lap_time) / profile.sessions_count
 
-    # ── Sector débil ──────────────────────────────────────────────────────────
+    # ── Sector débil (por frecuencia acumulada) ──────────────────────────────
+    # Contamos cuántas sesiones fue débil cada sector.
+    # weak_sector = el más frecuente históricamente, no el último.
+    existing_cp = dict(profile.corner_profiles or {})
+    sector_counts: dict[str, int] = existing_cp.get("sector_counts", {"S1": 0, "S2": 0, "S3": 0})
     weak = pre_analysis.get("weak_sector")
     if weak and weak in ("S1", "S2", "S3"):
-        profile.weak_sector = weak
+        sector_counts[weak] = sector_counts.get(weak, 0) + 1
+    existing_cp["sector_counts"] = sector_counts
+    # El sector débil es el más frecuente (al menos 1 aparición)
+    if any(sector_counts.values()):
+        profile.weak_sector = max(sector_counts, key=lambda k: sector_counts[k])
 
-    # ── Tendencia (segundos ganados cada 5 sesiones) ──────────────────────────
-    # Solo calculable con ≥2 sesiones; usando simple δ respecto al avg anterior
-    if prev_count >= 1 and profile.avg_lap > 0:
-        # tendencia positiva = mejorando (avg bajando)
+    # ── Historial de tiempos (para regresión lineal) ──────────────────────────
+    lap_times_history: list[float] = existing_cp.get("lap_times", [])
+    lap_times_history.append(lap_time)
+    if len(lap_times_history) > 20:
+        lap_times_history = lap_times_history[-20:]
+    existing_cp["lap_times"] = lap_times_history
+
+    # ── Tendencia: regresión lineal sobre últimas N sesiones ──────────────────
+    # slope negativo = tiempos bajando = piloto mejorando → trend positivo
+    n = len(lap_times_history)
+    if n >= 3:
+        x_mean = (n - 1) / 2.0
+        y_mean = sum(lap_times_history) / n
+        num = sum((i - x_mean) * (lap_times_history[i] - y_mean) for i in range(n))
+        den = sum((i - x_mean) ** 2 for i in range(n))
+        slope = num / den if den != 0 else 0.0
+        # positivo = mejorando (slope negativo → trend positivo)
+        profile.trend = round(-slope, 3)
+    elif prev_count >= 1 and profile.avg_lap > 0:
+        # fallback hasta tener 3 sesiones: delta simple
         prev_avg = (profile.avg_lap * profile.sessions_count - lap_time) / prev_count
         profile.trend = round(prev_avg - lap_time, 3)
 
     # ── Corner profiles acumulados ────────────────────────────────────────────
-    # Guarda g-forces, velocidad máx y temp de frenos del pre-análisis
     new_corners: dict = {}
     if pre_analysis.get("g_forces"):
         new_corners["g_forces"] = pre_analysis["g_forces"]
@@ -100,15 +123,14 @@ def update_profile(
         new_corners["handling"] = pre_analysis["handling"]
 
     if new_corners:
-        existing = profile.corner_profiles or {}
-        # Guardar historial por sesión (máx últimas 10)
-        history: list = existing.get("history", [])
+        history: list = existing_cp.get("history", [])
         history.append(new_corners)
         if len(history) > 10:
             history = history[-10:]
-        existing["history"] = history
-        existing["latest"] = new_corners
-        profile.corner_profiles = existing
+        existing_cp["history"] = history
+        existing_cp["latest"] = new_corners
+
+    profile.corner_profiles = existing_cp
 
     # ── Setup más común ───────────────────────────────────────────────────────
     if pre_analysis.get("tyre_press"):
