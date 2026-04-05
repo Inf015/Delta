@@ -30,6 +30,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 from reportlab.platypus.flowables import Flowable
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import Image as RLImage
 
 # ---------------------------------------------------------------------------
 # Palette
@@ -1326,6 +1328,88 @@ def _section_11(report: dict, content_w: float) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Telemetry charts section
+# ---------------------------------------------------------------------------
+
+def _section_telemetry(report: dict, content_w: float) -> list:
+    """Sección de Telemetría — trazas de velocidad, mapa de velocidad y mapa de marchas."""
+    points = report.get("section_telemetry_points")
+    if not points or len(points) < 10:
+        return []
+
+    try:
+        from app.services.reports.telemetry_charts import (
+            speed_throttle_chart,
+            velocity_map_chart,
+            gear_map_chart,
+        )
+    except Exception:
+        return []
+
+    story: list = []
+    story.append(PageBreak())
+    story.append(SectionHeader("Telemetría", "Análisis Visual de Telemetría", content_w))
+    story.append(Spacer(1, 10))
+
+    lap_time_fmt = report.get("section_telemetry_lap_fmt", "")
+    if lap_time_fmt:
+        story.append(Paragraph(f"Mejor vuelta analizada: <b>{lap_time_fmt}</b>", S_MUTED))
+        story.append(Spacer(1, 8))
+
+    # ── Speed + Throttle/Brake chart ────────────────────────────────────────
+    story.append(Paragraph("<b>Velocidad · Throttle · Brake</b>", S_BOLD))
+    story.append(Spacer(1, 6))
+    try:
+        buf = speed_throttle_chart(points)
+        img = RLImage(ImageReader(buf), width=content_w, height=content_w * 0.40, kind="bound")
+        story.append(img)
+    except Exception:
+        story.append(Paragraph("No se pudo generar el gráfico de trazas.", S_MUTED))
+    story.append(Spacer(1, 12))
+
+    # ── Velocity heatmap + Gear map side by side ─────────────────────────────
+    map_w = (content_w - 8) / 2
+    map_h = map_w * 0.65
+
+    vel_img = None
+    gear_img = None
+
+    try:
+        buf_v = velocity_map_chart(points)
+        vel_img = RLImage(ImageReader(buf_v), width=map_w, height=map_h, kind="bound")
+    except Exception:
+        pass
+
+    try:
+        buf_g = gear_map_chart(points)
+        gear_img = RLImage(ImageReader(buf_g), width=map_w, height=map_h, kind="bound")
+    except Exception:
+        pass
+
+    if vel_img or gear_img:
+        labels = [
+            Paragraph("<b>Mapa de Velocidad</b>", _style("ml", fontName="Helvetica-Bold", fontSize=8, textColor=C_TEXT_SEC)),
+            Paragraph("<b>Mapa de Marchas</b>", _style("mr", fontName="Helvetica-Bold", fontSize=8, textColor=C_TEXT_SEC)),
+        ]
+        label_table = Table([labels], colWidths=[map_w + 4, map_w + 4])
+        label_table.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER")]))
+        story.append(label_table)
+        story.append(Spacer(1, 4))
+
+        imgs = [vel_img or Spacer(map_w, map_h), gear_img or Spacer(map_w, map_h)]
+        map_table = Table([imgs], colWidths=[map_w + 4, map_w + 4])
+        map_table.setStyle(TableStyle([
+            ("ALIGN",   (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN",  (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID",    (0, 0), (-1, -1), 0.3, C_BORDER),
+            ("BACKGROUND", (0, 0), (-1, -1), C_CARD),
+        ]))
+        story.append(map_table)
+
+    return story
+
+
+# ---------------------------------------------------------------------------
 # Main public function
 # ---------------------------------------------------------------------------
 
@@ -1381,6 +1465,9 @@ def generate_report_pdf(report: dict, output_path: str | Path) -> str:
 
     # Section 3
     story.extend(_section_3(report, content_w))
+
+    # Telemetry charts
+    story.extend(_section_telemetry(report, content_w))
 
     # Section 4
     story.extend(_section_4(report, content_w))

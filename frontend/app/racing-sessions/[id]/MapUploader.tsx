@@ -17,8 +17,15 @@ export default function MapUploader({ racingSessionId, hasMap }: Props) {
   const [done, setDone] = useState(hasMap)
 
   useEffect(() => {
-    // Probar si ya existe un mapa en el servidor
-    fetch(trackMapUrl(racingSessionId), { method: 'HEAD' })
+    // Probar si ya existe un mapa usando GET con auth
+    const token = typeof window !== 'undefined' ? localStorage.getItem('delta_token') : null
+    fetch(trackMapUrl(racingSessionId), {
+      method: 'GET',
+      headers: {
+        'ngrok-skip-browser-warning': 'true',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
       .then((r) => { if (r.ok) setDone(true) })
       .catch(() => {})
   }, [racingSessionId])

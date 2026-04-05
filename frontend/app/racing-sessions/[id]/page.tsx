@@ -1,31 +1,71 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { notFound } from 'next/navigation'
-import { getRacingSession } from '../../lib/api'
+import { getRacingSession, RacingSessionDetail } from '../../lib/api'
 import LapUploader from './LapUploader'
 import SetupUploader from './SetupUploader'
 import MapUploader from './MapUploader'
 import DeleteButton from './DeleteButton'
+import DeltaMap from './DeltaMap'
+import TelemetryPanel from './TelemetryPanel'
 
-interface Props {
-  params: Promise<{ id: string }>
+function fmtTime(s: number) {
+  const m = Math.floor(s / 60)
+  const rem = s - m * 60
+  return `${m}:${rem.toFixed(3).padStart(6, '0')}`
 }
 
-export default async function RacingSessionPage({ params }: Props) {
-  const { id } = await params
-  const session = await getRacingSession(id)
+export default function RacingSessionPage() {
+  const params = useParams()
+  const searchParams = useSearchParams()
+  const id = params.id as string
+  const uploadError = searchParams.get('upload_error')
+  const [session, setSession] = useState<RacingSessionDetail | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  if (!session) notFound()
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+
+    async function fetchAndSchedule() {
+      const s = await getRacingSession(id)
+      if (cancelled) return
+      setSession(s)
+      setLoading(false)
+
+      // Auto-refresh mientras haya vueltas pendientes de procesar
+      const hasPending = s && s.laps.some((l: { processed: boolean }) => !l.processed)
+      if (hasPending) {
+        timer = setTimeout(fetchAndSchedule, 5000)
+      }
+    }
+
+    fetchAndSchedule()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [id])
+
+  if (loading) {
+    return <div className="text-gray-600 text-sm py-12 text-center">Cargando...</div>
+  }
+
+  if (!session) {
+    return <div className="text-gray-500 text-sm py-12 text-center">Sesión no encontrada.</div>
+  }
 
   const bestTime = session.laps.length > 0 ? Math.min(...session.laps.map((l) => l.lap_time)) : null
 
-  function fmtTime(s: number) {
-    const m = Math.floor(s / 60)
-    const rem = s - m * 60
-    return `${m}:${rem.toFixed(3).padStart(6, '0')}`
-  }
-
   return (
     <div>
+      {uploadError && (
+        <div className="mb-6 border border-yellow-700/50 bg-yellow-950/20 px-4 py-3 text-yellow-400 text-sm">
+          <strong>Error al subir vueltas:</strong> {uploadError}. Usa el botón de abajo para reintentar.
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div>
@@ -154,6 +194,16 @@ export default async function RacingSessionPage({ params }: Props) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Delta Map */}
+      {session.laps.length > 0 && (
+        <DeltaMap racingSessionId={session.id} />
+      )}
+
+      {/* Telemetry Panel */}
+      {session.laps.length > 0 && (
+        <TelemetryPanel racingSessionId={session.id} />
       )}
     </div>
   )

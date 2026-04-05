@@ -5,17 +5,10 @@ Retorna un dict JSON-serializable que el endpoint combina con el análisis de Cl
 
 from __future__ import annotations
 
-import math
 import statistics
 from typing import Any
 
-
-def _fmt(seconds: float) -> str:
-    if seconds <= 0:
-        return "—"
-    m = int(seconds // 60)
-    s = seconds - m * 60
-    return f"{m}:{s:06.3f}"
+from app.utils.formatters import fmt_lap_time as _fmt
 
 
 def _lap_status(lap: dict, best_time: float, prev_time: float | None, lap_index: int) -> str:

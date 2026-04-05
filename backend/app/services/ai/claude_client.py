@@ -16,6 +16,7 @@ from json_repair import repair_json
 
 from app.core.config import settings
 from app.models.knowledge import KnowledgeProfile
+from app.utils.formatters import fmt_lap_time as _fmt
 
 
 def _client() -> anthropic.Anthropic:
@@ -144,14 +145,6 @@ def _build_profile_summary(profile: KnowledgeProfile | None, prev_recs: list | N
                 lines.append(f"  • {rec.text}{zone} — {result}")
 
     return "\n".join(lines)
-
-
-def _fmt(seconds: float) -> str:
-    if seconds <= 0:
-        return "—"
-    m = int(seconds // 60)
-    s = seconds - m * 60
-    return f"{m}:{s:06.3f}"
 
 
 def analyze(

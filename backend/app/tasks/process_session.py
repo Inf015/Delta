@@ -19,14 +19,16 @@ from datetime import datetime, timezone
 
 from celery.utils.log import get_task_logger
 
+from sqlalchemy import desc
+
 from app.core.celery_app import celery_app
 from app.core.db import SessionLocal
 from app.models.analysis import Analysis, AnalysisStatus
 from app.models.knowledge import Recommendation
+from app.models.racing_session import RacingSession
 from app.models.session import TelemetrySession
-from sqlalchemy import desc
-from app.services.analysis import pre_analysis as pre
 from app.services.ai import claude_client
+from app.services.analysis import pre_analysis as pre
 from app.services.knowledge import kb_service
 from app.services.parsers.csv_parser import parse_csv
 from app.services.reports.pdf_generator import generate_pdf
@@ -107,7 +109,6 @@ def process_session(self, session_id: str) -> dict:
         # Buscar la mejor vuelta procesada de la misma racing_session para comparación
         best_lap_pre: dict | None = None
         if session.racing_session_id:
-            from app.models.analysis import Analysis as AnalysisModel
             best_session = (
                 db.query(TelemetrySession)
                 .filter(
@@ -119,7 +120,7 @@ def process_session(self, session_id: str) -> dict:
                 .first()
             )
             if best_session:
-                best_analysis = db.query(AnalysisModel).filter_by(session_id=best_session.id).first()
+                best_analysis = db.query(Analysis).filter_by(session_id=best_session.id).first()
                 if best_analysis and best_analysis.pre_analysis:
                     best_lap_pre = best_analysis.pre_analysis
 
@@ -137,7 +138,6 @@ def process_session(self, session_id: str) -> dict:
         # Invalidar report_cache de la racing_session — puede haberse generado
         # antes de que este análisis completara, dejando datos vacíos en gomas/frenos
         if session.racing_session_id:
-            from app.models.racing_session import RacingSession
             rs = db.get(RacingSession, session.racing_session_id)
             if rs:
                 rs.report_cache = None
@@ -172,7 +172,7 @@ def process_session(self, session_id: str) -> dict:
         }
 
     except Exception as exc:
-        logger.error("Error en sesión %s: %s", session_id, exc)
+        logger.error("Error en sesión %s: %s", session_id, exc, exc_info=True)
         analysis.status        = AnalysisStatus.failed
         analysis.error_message = str(exc)
         db.commit()

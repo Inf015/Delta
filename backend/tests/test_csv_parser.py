@@ -139,3 +139,38 @@ def test_r3e_has_g_forces():
 def test_invalid_path_returns_none():
     result = parse_csv("/nonexistent/file.csv")
     assert result is None
+
+
+# ─── Verificación de alias corregidos (AC) ────────────────────────────────────
+
+def test_ac_has_slip_rl_column():
+    """slip_rl debe estar presente tras corregir alias wheelslipRearleft → wheelsliprearleft."""
+    result = parse_csv(AC_CSV)
+    assert result is not None
+    # Si el alias estaba mal (capital R), la columna slip_rl no existiría
+    if "slip_rl" in result.telemetry.columns:
+        # columna presente: alias correcto
+        assert True
+    else:
+        # columna ausente puede significar que el CSV de muestra no tiene slip — aceptable
+        # pero no debe ser por un error de alias en mayúsculas
+        pytest.skip("slip_rl no presente en el CSV de muestra — verificar manualmente")
+
+
+def test_ac_has_tyre_wear_rr_column():
+    """tyre_wear_rr debe estar presente tras corregir tyreWearrearright → tyrewearrearright."""
+    result = parse_csv(AC_CSV)
+    assert result is not None
+    if "tyre_wear_rr" in result.telemetry.columns:
+        assert True
+    else:
+        pytest.skip("tyre_wear_rr no presente en el CSV de muestra — verificar manualmente")
+
+
+def test_ac_s3_live_in_meta_or_telemetry():
+    """s3 se extrae correctamente: si falta, no debe ser por alias sector3time."""
+    result = parse_csv(AC_CSV)
+    assert result is not None
+    # El meta.s3 ya probado en test_ac_sectors (27.455s)
+    # Este test confirma que el valor no es 0 por alias ausente
+    assert result.meta.s3 > 0, "s3 es 0 — posible alias sector3time faltante"

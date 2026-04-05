@@ -5,6 +5,8 @@ GET /api/v1/sessions/{id}/analysis — análisis de la sesión
 GET /api/v1/sessions/{id}/pdf  — descarga del PDF
 """
 
+import math
+import re
 import uuid
 from pathlib import Path
 
@@ -12,23 +14,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
 from app.models.session import TelemetrySession
 from app.models.analysis import Analysis
+from app.models.user import User
+from app.utils.formatters import fmt_lap_time as _fmt
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
-
-# TODO PASO 7: reemplazar con user_id real desde JWT
-PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-
-def _fmt(lap_time: float) -> str:
-    import math
-    if not isinstance(lap_time, (int, float)) or lap_time <= 0 or math.isnan(lap_time) or math.isinf(lap_time):
-        return "—"
-    m = int(lap_time // 60)
-    s = lap_time - m * 60
-    return f"{m}:{s:06.3f}"
 
 
 def _session_dict(s: TelemetrySession) -> dict:
@@ -67,10 +59,10 @@ def _analysis_dict(a: Analysis) -> dict:
 
 
 @router.get("/")
-def list_sessions(db: Session = Depends(get_db)):
+def list_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     sessions = (
         db.query(TelemetrySession)
-        .filter(TelemetrySession.user_id == PLACEHOLDER_USER_ID)
+        .filter(TelemetrySession.user_id == current_user.id)
         .order_by(TelemetrySession.created_at.desc())
         .all()
     )
@@ -78,7 +70,7 @@ def list_sessions(db: Session = Depends(get_db)):
 
 
 @router.get("/{session_id}")
-def get_session(session_id: str, db: Session = Depends(get_db)):
+def get_session(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -86,7 +78,7 @@ def get_session(session_id: str, db: Session = Depends(get_db)):
 
     s = db.query(TelemetrySession).filter(
         TelemetrySession.id == sid,
-        TelemetrySession.user_id == PLACEHOLDER_USER_ID,
+        TelemetrySession.user_id == current_user.id,
     ).first()
 
     if not s:
@@ -96,7 +88,7 @@ def get_session(session_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{session_id}/analysis")
-def get_analysis(session_id: str, db: Session = Depends(get_db)):
+def get_analysis(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -105,7 +97,7 @@ def get_analysis(session_id: str, db: Session = Depends(get_db)):
     # Verificar que la sesión pertenece al usuario
     s = db.query(TelemetrySession).filter(
         TelemetrySession.id == sid,
-        TelemetrySession.user_id == PLACEHOLDER_USER_ID,
+        TelemetrySession.user_id == current_user.id,
     ).first()
 
     if not s:
@@ -120,7 +112,7 @@ def get_analysis(session_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{session_id}/pdf")
-def download_pdf(session_id: str, db: Session = Depends(get_db)):
+def download_pdf(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -128,7 +120,7 @@ def download_pdf(session_id: str, db: Session = Depends(get_db)):
 
     s = db.query(TelemetrySession).filter(
         TelemetrySession.id == sid,
-        TelemetrySession.user_id == PLACEHOLDER_USER_ID,
+        TelemetrySession.user_id == current_user.id,
     ).first()
 
     if not s:
@@ -141,7 +133,6 @@ def download_pdf(session_id: str, db: Session = Depends(get_db)):
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="Archivo PDF no encontrado en disco")
 
-    import re
     safe_track = re.sub(r"[^\w\-]", "_", s.track or "session")[:40]
     filename = f"delta_{safe_track}_{_fmt(s.lap_time)}.pdf".replace(":", "-")
     return FileResponse(path=str(pdf_path), media_type="application/pdf", filename=filename)

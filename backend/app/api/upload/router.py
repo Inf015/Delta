@@ -13,24 +13,16 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db
 from app.models.session import SessionType, Simulator, SourceType, TelemetrySession
+from app.models.user import User
 from app.models.racing_session import RacingSession
 from app.schemas.session import SessionOut
 from app.services.parsers.csv_parser import is_valid_lap, parse_csv
 from app.tasks.process_session import process_session
+from app.utils.formatters import fmt_lap_time as _fmt
 
 router = APIRouter(prefix="/upload", tags=["upload"])
-
-PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-
-def _fmt(lap_time: float) -> str:
-    if lap_time <= 0:
-        return "—"
-    m = int(lap_time // 60)
-    s = lap_time - m * 60
-    return f"{m}:{s:06.3f}"
 
 
 def _sim_enum(sim_str: str) -> tuple[Simulator, str]:
@@ -130,12 +122,13 @@ async def upload_csv(
     files: list[UploadFile] = File(...),
     racing_session_id: uuid.UUID = Form(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if not files:
         raise HTTPException(status_code=400, detail="Se requiere al menos un archivo")
 
     rs = db.query(RacingSession).filter_by(
-        id=racing_session_id, user_id=PLACEHOLDER_USER_ID
+        id=racing_session_id, user_id=current_user.id
     ).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
@@ -201,7 +194,7 @@ async def upload_csv(
 
         try:
             lap = TelemetrySession(
-                user_id=PLACEHOLDER_USER_ID,
+                user_id=current_user.id,
                 racing_session_id=rs.id,
                 simulator=sim_enum,
                 track=rs.track or m.track,

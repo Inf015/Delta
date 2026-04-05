@@ -1,8 +1,16 @@
-import Link from 'next/link'
-import { getRacingSessions } from './lib/api'
+'use client'
 
-export default async function Dashboard() {
-  const sessions = await getRacingSessions()
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { getRacingSessions, RacingSession } from './lib/api'
+
+export default function Dashboard() {
+  const [sessions, setSessions] = useState<RacingSession[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    getRacingSessions().then(setSessions).finally(() => setLoading(false))
+  }, [])
 
   return (
     <div>
@@ -10,7 +18,7 @@ export default async function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold text-white">Sesiones</h1>
           <p className="text-gray-500 text-sm mt-1">
-            {sessions.length} sesión{sessions.length !== 1 ? 'es' : ''} registrada{sessions.length !== 1 ? 's' : ''}
+            {loading ? '...' : `${sessions.length} sesión${sessions.length !== 1 ? 'es' : ''} registrada${sessions.length !== 1 ? 's' : ''}`}
           </p>
         </div>
         <Link
@@ -21,10 +29,14 @@ export default async function Dashboard() {
         </Link>
       </div>
 
-      {sessions.length === 0 ? (
+      {loading ? (
+        <div className="border border-gray-800 p-12 text-center">
+          <p className="text-gray-600 text-sm">Cargando sesiones...</p>
+        </div>
+      ) : sessions.length === 0 ? (
         <div className="border border-gray-800 p-12 text-center">
           <p className="text-gray-500 mb-4">Sin sesiones todavía.</p>
-          <Link href="/upload" className="text-f1red hover:underline text-sm">
+          <Link href="/racing-sessions/new" className="text-f1red hover:underline text-sm">
             Subir tu primer CSV →
           </Link>
         </div>
@@ -50,7 +62,10 @@ export default async function Dashboard() {
                     i % 2 === 0 ? '' : 'bg-gray-950'
                   }`}
                 >
-                  <td className="px-4 py-3 text-white">{s.track}</td>
+                  <td className="px-4 py-3">
+                    <p className="text-white">{s.track}</p>
+                    {s.name && <p className="text-gray-500 text-xs mt-0.5">{s.name}</p>}
+                  </td>
                   <td className="px-4 py-3 text-gray-400">{s.car}</td>
                   <td className="px-4 py-3">
                     <span className="text-xs bg-gray-800 px-2 py-0.5 text-gray-300">

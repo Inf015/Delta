@@ -64,7 +64,7 @@ export default function TechPilotPage() {
                   <span className="text-green-400 text-xs font-bold font-mono">{s.best_lap_fmt}</span>
                   {s.has_report ? (
                     <Link
-                      href={`/technician/sessions/${s.id}?pilot=${id}`}
+                      href={`/technician/sessions/${s.id}?pilot=${id}&name=${encodeURIComponent(pilot?.name || pilot?.email || '')}`}
                       className="text-blue-400 hover:text-blue-300 text-xs transition-colors"
                     >
                       Reporte →

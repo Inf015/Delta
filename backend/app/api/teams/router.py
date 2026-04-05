@@ -15,10 +15,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_db, get_technician_user
 from app.models.racing_session import RacingSession
+from app.models.session import TelemetrySession
 from app.models.team import Team, TeamMember
 from app.models.user import User
 from app.utils.formatters import fmt_lap_time as _fmt
@@ -74,25 +76,34 @@ def _get_my_team(db: Session, owner_id) -> Team:
     return team
 
 
-def _session_to_summary(s: RacingSession, pilot: User) -> dict:
-    from sqlalchemy import exists
-    from app.models.analysis import Analysis, AnalysisStatus
-    has_report = bool(
-        s.report_cache or
-        (s.analyses and any(a.status == AnalysisStatus.completed for a in s.analyses))
+def _sessions_for_pilot(db: Session, pilot: User) -> list[dict]:
+    rows = (
+        db.query(
+            RacingSession,
+            func.count(TelemetrySession.id).label("lap_count"),
+            func.min(TelemetrySession.lap_time).label("best_lap"),
+        )
+        .outerjoin(TelemetrySession, TelemetrySession.racing_session_id == RacingSession.id)
+        .filter(RacingSession.user_id == pilot.id)
+        .group_by(RacingSession.id)
+        .order_by(RacingSession.created_at.desc())
+        .all()
     )
-    return {
-        "id": str(s.id),
-        "pilot_email": pilot.email,
-        "pilot_name": pilot.name or pilot.email,
-        "name": s.name,
-        "track": s.track,
-        "car": s.car,
-        "session_date": s.session_date,
-        "lap_count": s.lap_count or 0,
-        "best_lap_fmt": _fmt(s.best_lap_time) if s.best_lap_time else "—",
-        "has_report": has_report,
-    }
+    return [
+        {
+            "id": str(rs.id),
+            "pilot_email": pilot.email,
+            "pilot_name": pilot.name or pilot.email,
+            "name": rs.name,
+            "track": rs.track,
+            "car": rs.car,
+            "session_date": rs.session_date,
+            "lap_count": lap_count or 0,
+            "best_lap_fmt": _fmt(best_lap) if best_lap else "—",
+            "has_report": bool(rs.report_cache),
+        }
+        for rs, lap_count, best_lap in rows
+    ]
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -203,14 +214,7 @@ def get_team_sessions(
     )
     result = []
     for _, pilot in members:
-        sessions = (
-            db.query(RacingSession)
-            .filter(RacingSession.user_id == pilot.id)
-            .order_by(RacingSession.created_at.desc())
-            .all()
-        )
-        for s in sessions:
-            result.append(_session_to_summary(s, pilot))
+        result.extend(_sessions_for_pilot(db, pilot))
     result.sort(key=lambda x: x["session_date"] or "", reverse=True)
     return result
 
@@ -230,13 +234,7 @@ def get_pilot_sessions(
         raise HTTPException(status_code=403, detail="El piloto no pertenece a tu equipo")
 
     pilot = db.query(User).filter(User.id == pilot_id).first()
-    sessions = (
-        db.query(RacingSession)
-        .filter(RacingSession.user_id == pilot_id)
-        .order_by(RacingSession.created_at.desc())
-        .all()
-    )
-    return [_session_to_summary(s, pilot) for s in sessions]
+    return _sessions_for_pilot(db, pilot)
 
 
 @router.get("/my/pilots/{pilot_id}/sessions/{session_id}/report")

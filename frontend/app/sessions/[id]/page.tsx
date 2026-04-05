@@ -1,9 +1,11 @@
-import Link from 'next/link'
-import { getAnalysis } from '../../lib/api'
+'use client'
 
-const API = (typeof window === 'undefined'
-  ? process.env.API_URL
-  : process.env.NEXT_PUBLIC_API_URL) || 'http://localhost:8000'
+import { useEffect, useState } from 'react'
+import { useParams } from 'next/navigation'
+import Link from 'next/link'
+import { getAnalysis, Analysis } from '../../lib/api'
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 function fmtTime(s: number) {
   if (!s || s <= 0) return '—'
@@ -51,18 +53,33 @@ function ScoreBar({ value, label }: { value: number; label: string }) {
   )
 }
 
-async function getSession(id: string) {
-  const res = await fetch(`${API}/api/v1/sessions/${id}`, { cache: 'no-store' })
-  if (!res.ok) return null
-  return res.json()
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SessionMeta = Record<string, any>
 
-export default async function SessionPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
-  const [session, analysis] = await Promise.all([
-    getSession(id),
-    getAnalysis(id),
-  ])
+export default function SessionPage() {
+  const params = useParams()
+  const id = params.id as string
+  const [session, setSession] = useState<SessionMeta | null>(null)
+  const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const token = localStorage.getItem('delta_token')
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+
+    Promise.all([
+      fetch(`${API}/api/v1/sessions/${id}`, { headers }).then((r) => r.ok ? r.json() : null),
+      getAnalysis(id),
+    ]).then(([s, a]) => {
+      setSession(s)
+      setAnalysis(a)
+      setLoading(false)
+    })
+  }, [id])
+
+  if (loading) {
+    return <div className="text-gray-600 text-sm py-12 text-center">Cargando...</div>
+  }
 
   if (!session) {
     return (
@@ -125,7 +142,6 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
 
       {ai && (
         <>
-          {/* Clasificación contextual */}
           {ai.lap_context && (() => {
             const { label, color } = classificationLabel(ai.lap_context.classification)
             return (
@@ -136,7 +152,6 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             )
           })()}
 
-          {/* Resumen */}
           {ai.summary && (
             <section>
               <h2 className="text-xs uppercase text-gray-600 mb-3 tracking-widest">Resumen</h2>
@@ -144,7 +159,6 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             </section>
           )}
 
-          {/* Desglose por sector */}
           {ai.sector_analysis && (
             <section>
               <h2 className="text-xs uppercase text-gray-600 mb-3 tracking-widest">Análisis por Sector</h2>
@@ -166,7 +180,6 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             </section>
           )}
 
-          {/* Scores */}
           {ai.scores && (
             <section>
               <h2 className="text-xs uppercase text-gray-600 mb-3 tracking-widest">Puntuación técnica</h2>
@@ -180,13 +193,12 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             </section>
           )}
 
-          {/* Fortalezas / Problemas */}
           <div className="grid grid-cols-2 gap-6">
             {ai.strengths && ai.strengths.length > 0 && (
               <section>
                 <h2 className="text-xs uppercase text-gray-600 mb-3 tracking-widest">Fortalezas</h2>
                 <ul className="space-y-2">
-                  {ai.strengths.map((s, i) => (
+                  {ai.strengths.map((s: string, i: number) => (
                     <li key={i} className="text-sm text-gray-300 flex gap-2">
                       <span className="text-green-500 flex-shrink-0">✓</span>{s}
                     </li>
@@ -198,7 +210,7 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
               <section>
                 <h2 className="text-xs uppercase text-gray-600 mb-3 tracking-widest">Problemas</h2>
                 <ul className="space-y-2">
-                  {ai.issues.map((issue, i) => (
+                  {ai.issues.map((issue: { area: string; detail: string; severity: string }, i: number) => (
                     <li key={i} className="text-sm">
                       <span className={`font-bold ${severityColor(issue.severity)}`}>{issue.area}</span>
                       <span className="text-gray-400"> — {issue.detail}</span>
@@ -209,12 +221,11 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             )}
           </div>
 
-          {/* Recomendaciones */}
           {ai.recommendations && ai.recommendations.length > 0 && (
             <section>
               <h2 className="text-xs uppercase text-gray-600 mb-3 tracking-widest">Recomendaciones</h2>
               <div className="space-y-3">
-                {ai.recommendations.map((r, i) => (
+                {ai.recommendations.map((r: { text: string; zone: string | null; expected_gain_s: number }, i: number) => (
                   <div key={i} className="border border-gray-800 p-4 flex gap-4 items-start">
                     <span className="text-f1red font-bold text-lg w-6 flex-shrink-0">{i + 1}</span>
                     <div className="flex-1">
@@ -232,12 +243,11 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             </section>
           )}
 
-          {/* Setup */}
           {ai.setup_suggestions && ai.setup_suggestions.length > 0 && (
             <section>
               <h2 className="text-xs uppercase text-gray-600 mb-3 tracking-widest">Setup</h2>
               <ul className="space-y-1">
-                {ai.setup_suggestions.map((s, i) => (
+                {ai.setup_suggestions.map((s: string, i: number) => (
                   <li key={i} className="text-sm text-gray-400 flex gap-2">
                     <span className="text-gray-600">→</span>{s}
                   </li>
@@ -246,12 +256,11 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             </section>
           )}
 
-          {/* Plan de mejora */}
           {ai.improvement_plan && ai.improvement_plan.length > 0 && (
             <section className="border border-f1red/30 bg-red-950/10 p-5">
               <h2 className="text-xs uppercase text-gray-600 mb-4 tracking-widest">Plan para la próxima vuelta</h2>
               <div className="space-y-4">
-                {ai.improvement_plan.map((step) => (
+                {ai.improvement_plan.map((step: { step: number; action: string; zone: string; expected_gain_s: number }) => (
                   <div key={step.step} className="flex gap-4 items-start">
                     <span className="text-f1red font-bold text-xl w-6 flex-shrink-0 leading-none">{step.step}</span>
                     <div className="flex-1">
@@ -269,7 +278,6 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
             </section>
           )}
 
-          {/* Legacy: next_session_focus (compatibilidad con análisis viejos) */}
           {ai.next_session_focus && !ai.improvement_plan?.length && (
             <section className="border border-f1red/30 bg-red-950/10 p-4">
               <h2 className="text-xs uppercase text-gray-600 mb-2 tracking-widest">Próxima sesión</h2>
@@ -284,7 +292,6 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
         </>
       )}
 
-      {/* Pre-análisis — datos brutos */}
       {pre && (
         <details className="border border-gray-800">
           <summary className="px-4 py-3 text-xs text-gray-600 cursor-pointer hover:text-gray-400 uppercase tracking-widest">

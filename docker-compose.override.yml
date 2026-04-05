@@ -28,18 +28,28 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: development
-      API_URL: http://api:8000                    # server-side (Docker network)
-      NEXT_PUBLIC_API_URL: http://localhost:8000  # client-side (browser)
+      API_URL: http://api:8000   # server-side (Docker network)
+      # NEXT_PUBLIC_API_URL no definido → api.ts usa '' → URLs relativas → nginx hace el proxy
     volumes:
       - ./frontend:/app
     command: sh -c "npm install && npm run dev"
 
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    profiles: []              # sobreescribe el profile "prod" → siempre activo en dev
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+      - frontend
+
   db:
     ports:
-      - "5433:5432"             # 5433 en Mac → 5432 en container (evita conflicto con postgres local)
+      - "5433:5432"             # 5433 en Mac → 5432 en container
 
   redis:
     ports:
       - "6379:6379"
-
-  # nginx solo en prod — ver docker-compose.yml profiles: [prod]

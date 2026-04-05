@@ -192,7 +192,7 @@ export default function TechnicianPage() {
                       <td className="px-4 py-3 text-right">
                         {s.has_report ? (
                           <Link
-                            href={`/technician/sessions/${s.id}?pilot=${team.pilots.find(p => p.email === s.pilot_email)?.id}`}
+                            href={`/technician/sessions/${s.id}?pilot=${team.pilots.find(p => p.email === s.pilot_email)?.id}&name=${encodeURIComponent(s.pilot_name)}`}
                             className="text-blue-400 hover:text-blue-300 text-xs transition-colors"
                           >
                             Reporte →

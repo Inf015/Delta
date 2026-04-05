@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useState, useRef, DragEvent } from 'react'
+import { useState, useRef, useEffect, DragEvent } from 'react'
 import { previewCSV, createRacingSession, uploadCSVs, uploadSetup, CSVPreview } from '../../lib/api'
 
 const SIMULATORS = ['AC', 'R3E']
@@ -14,10 +14,15 @@ export default function NewRacingSession() {
   const [dragging, setDragging] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savingStep, setSavingStep] = useState<'creating' | 'uploading' | null>(null)
   const [error, setError] = useState('')
   const [files, setFiles] = useState<File[]>([])
+  const filesRef = useRef<File[]>([])  // always-current copy to avoid stale closure
   const [setupFile, setSetupFile] = useState<File | null>(null)
   const previewDone = useRef(false)
+
+  // Keep ref in sync with state so submit always sees latest files
+  useEffect(() => { filesRef.current = files }, [files])
 
   const [form, setForm] = useState({
     name: '',
@@ -56,7 +61,12 @@ export default function NewRacingSession() {
       }
     }
 
-    setFiles((prev) => [...prev, ...csvs])
+    setFiles((prev) => {
+      const next = [...prev, ...csvs]
+      filesRef.current = next  // update ref immediately, before next render
+      console.log('[Delta] addFiles: added', csvs.length, 'files, total=', next.length)
+      return next
+    })
   }
 
   function onDrop(e: DragEvent) {
@@ -68,7 +78,10 @@ export default function NewRacingSession() {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true)
+    setSavingStep('creating')
     setError('')
+
+    console.log('[Delta] submit: files state=', files.length, 'filesRef=', filesRef.current.length)
 
     try {
       const rs = await createRacingSession({
@@ -80,26 +93,43 @@ export default function NewRacingSession() {
         session_type: form.session_type,
       })
 
-      if (files.length > 0) {
+      let uploadError = ''
+
+      const currentFiles = filesRef.current
+      console.log('[Delta] after session create, currentFiles=', currentFiles.length, 'files state=', files.length)
+      if (currentFiles.length > 0) {
+        setSavingStep('uploading')
         try {
-          await uploadCSVs(files, rs.id)
+          console.log('[Delta] uploadCSVs starting, files=', currentFiles.map(f => f.name))
+          const result = await uploadCSVs(currentFiles, rs.id)
+          console.log('[Delta] uploadCSVs OK', result)
         } catch (uploadErr: unknown) {
-          // 409 = todas las vueltas ya existían — la sesión sigue siendo válida
-          const msg = uploadErr instanceof Error ? uploadErr.message : ''
+          const msg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr)
+          console.error('[Delta] uploadCSVs ERROR:', msg)
+          // 409 = todas las vueltas ya existían — OK
           if (!msg.includes('duplicada')) {
-            throw uploadErr
+            uploadError = msg || 'Error al subir vueltas'
           }
         }
       }
 
       if (setupFile) {
-        await uploadSetup(rs.id, setupFile)
+        try {
+          await uploadSetup(rs.id, setupFile)
+        } catch {
+          // setup optional, don't block redirect
+        }
       }
 
-      router.push(`/racing-sessions/${rs.id}`)
+      // Redirect always — session was created even if upload failed
+      const dest = uploadError
+        ? `/racing-sessions/${rs.id}?upload_error=${encodeURIComponent(uploadError)}`
+        : `/racing-sessions/${rs.id}`
+      router.push(dest)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Error')
       setSaving(false)
+      setSavingStep(null)
     }
   }
 
@@ -148,17 +178,22 @@ export default function NewRacingSession() {
 
       {/* Files list */}
       {files.length > 0 && (
-        <div className="mb-6 space-y-1">
-          {files.map((f, i) => (
-            <div key={i} className="flex items-center gap-2 text-xs border border-gray-900 px-3 py-1.5">
-              <span className="w-2 h-2 rounded-full bg-gray-600 shrink-0" />
-              <span className="text-gray-400 truncate flex-1">{f.name}</span>
-              <button
-                onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
-                className="text-gray-700 hover:text-gray-400 shrink-0"
-              >✕</button>
-            </div>
-          ))}
+        <div className="mb-6">
+          <div className="space-y-1">
+            {files.map((f, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs border border-gray-900 px-3 py-1.5">
+                <span className="w-2 h-2 rounded-full bg-green-600 shrink-0" />
+                <span className="text-gray-400 truncate flex-1">{f.name}</span>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => { setFiles([]); filesRef.current = []; previewDone.current = false }}
+            className="text-gray-700 hover:text-gray-500 text-xs mt-1"
+          >
+            ✕ quitar todos los archivos
+          </button>
         </div>
       )}
 
@@ -270,8 +305,10 @@ export default function NewRacingSession() {
           disabled={saving}
           className="w-full bg-f1red hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-3 font-bold text-sm transition-colors"
         >
-          {saving
-            ? 'CREANDO...'
+          {saving && savingStep === 'uploading'
+            ? `SUBIENDO ${files.length} VUELTA${files.length !== 1 ? 'S' : ''}...`
+            : saving
+            ? 'CREANDO SESIÓN...'
             : files.length > 0
             ? `CREAR SESIÓN Y SUBIR ${files.length} VUELTA${files.length !== 1 ? 'S' : ''}${setupFile ? ' + SETUP' : ''}`
             : 'CREAR SESIÓN'}

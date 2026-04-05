@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Float, Integer, DateTime, ForeignKey, JSON, Text, Boolean
+from sqlalchemy import Index, String, Float, Integer, DateTime, ForeignKey, JSON, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -14,9 +14,13 @@ class KnowledgeProfile(Base):
     Se actualiza automáticamente con cada sesión procesada (0 tokens).
     """
     __tablename__ = "knowledge_profiles"
+    __table_args__ = (
+        # Búsqueda get_or_create_profile: (user_id, track, car, simulator)
+        Index("ix_knowledge_profiles_lookup", "user_id", "track", "car", "simulator", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
 
     # Clave del perfil
     track: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -59,6 +63,10 @@ class Recommendation(Base):
     Se evalúa en la siguiente sesión del mismo circuito+auto.
     """
     __tablename__ = "recommendations"
+    __table_args__ = (
+        # Filtro update_after_ai: pendientes por perfil
+        Index("ix_recommendations_profile_tested", "profile_id", "tested"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     analysis_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("analyses.id"), nullable=False, index=True)

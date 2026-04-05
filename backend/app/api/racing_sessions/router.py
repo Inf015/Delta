@@ -10,42 +10,35 @@ POST  /api/v1/racing-sessions/compare   Comparación de dos sesiones
 """
 
 import logging
+import shutil
 import uuid
+from pathlib import Path
 from typing import Any
 
-import shutil
-import uuid as _uuid_mod
-from pathlib import Path
-
+import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_db
-from app.models.racing_session import RacingSession
-from app.models.session import TelemetrySession
+from app.core.config import settings
+from app.core.deps import get_current_user, get_db
 from app.models.analysis import Analysis
+from app.models.racing_session import RacingSession
+from app.models.session import SessionType, Simulator, TelemetrySession
 from app.models.track_info import TrackInfo
+from app.models.user import User
 from app.services.ai import claude_client
 from app.services.analysis import session_report as sr
+from app.services.parsers.csv_parser import parse_csv
 from app.services.parsers.setup_parser import parse_setup
 from app.services.reports.pdf_report import generate_report_pdf
 from app.services.tracks import track_service
+from app.services.tracks.track_normalizer import normalize_track_id
+from app.utils.formatters import fmt_lap_time as _fmt
 
 router = APIRouter(prefix="/racing-sessions", tags=["racing-sessions"])
-
-# TODO PASO 7: reemplazar con user_id del JWT
-PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-
-def _fmt(seconds: float) -> str:
-    if seconds <= 0:
-        return "—"
-    m = int(seconds // 60)
-    s = seconds - m * 60
-    return f"{m}:{s:06.3f}"
 
 
 def _generate_report(rs: RacingSession, db: Session) -> dict:
@@ -132,24 +125,93 @@ def _generate_report(rs: RacingSession, db: Session) -> dict:
     return report
 
 
+def _best_lap_with_csv_and_data(racing_session_id: uuid.UUID, db: Session) -> dict | None:
+    """
+    Returns resampled telemetry points for the best lap of a racing session.
+    Returns None if no CSV is available or parsing fails.
+    """
+    N = 400
+    lap = (
+        db.query(TelemetrySession)
+        .filter(
+            TelemetrySession.racing_session_id == racing_session_id,
+            TelemetrySession.csv_path.isnot(None),
+        )
+        .order_by(TelemetrySession.lap_time)
+        .first()
+    )
+    if not lap:
+        return None
+
+    parsed = parse_csv(lap.csv_path)
+    if parsed is None:
+        return None
+
+    df = parsed.telemetry
+    required = {"x", "z", "lap_distance", "speed"}
+    if required - set(df.columns):
+        return None
+
+    optional = {"throttle", "brake", "gear"}
+    cols = list(required | (optional & set(df.columns)))
+    df = df[cols].dropna(subset=list(required))
+    df = df.sort_values("lap_distance").reset_index(drop=True)
+    if df.empty or df["lap_distance"].max() <= 0:
+        return None
+
+    d_norm    = (df["lap_distance"] / df["lap_distance"].max()).values
+    d_uniform = np.linspace(0.0, 1.0, N)
+
+    def _interp(col: str, default: float = 0.0) -> np.ndarray:
+        if col in df.columns:
+            return np.interp(d_uniform, d_norm, df[col].values)
+        return np.full(N, default)
+
+    x_v  = _interp("x")
+    z_v  = _interp("z")
+    sp_v = _interp("speed")
+    th_v = _interp("throttle")
+    br_v = _interp("brake")
+    ge_v = _interp("gear")
+
+    points = [
+        {
+            "d":        float(d_uniform[i]),
+            "x":        float(x_v[i]),
+            "z":        float(z_v[i]),
+            "speed":    float(sp_v[i]),
+            "throttle": float(th_v[i]),
+            "brake":    float(br_v[i]),
+            "gear":     int(round(float(np.clip(ge_v[i], 0, 8)))),
+        }
+        for i in range(N)
+    ]
+
+    return {
+        "points":       points,
+        "lap_time":     lap.lap_time,
+        "lap_time_fmt": _fmt(lap.lap_time),
+    }
+
+
 # ── Schemas de respuesta ────────────────────────────────────────────────────
 
 class RacingSessionCreate(BaseModel):
-    name: str | None = None
-    track: str | None = None
-    car: str | None = None
-    simulator: str | None = None
-    session_date: str | None = None
-    session_type: str | None = None
+    name: str | None = Field(None, max_length=200)
+    track: str | None = Field(None, max_length=150)
+    car: str | None = Field(None, max_length=150)
+    simulator: str | None = Field(None, max_length=10)
+    session_date: str | None = Field(None, max_length=20)
+    session_type: str | None = Field(None, max_length=20)
 
 
 class RacingSessionUpdate(BaseModel):
-    name: str | None = None
-    track: str | None = None
-    car: str | None = None
-    simulator: str | None = None
-    session_date: str | None = None
-    session_type: str | None = None
+    name: str | None = Field(None, max_length=200)
+    track: str | None = Field(None, max_length=150)
+    car: str | None = Field(None, max_length=150)
+    simulator: str | None = Field(None, max_length=10)
+    session_date: str | None = Field(None, max_length=20)
+    session_type: str | None = Field(None, max_length=20)
 
 
 class IncidentOut(BaseModel):
@@ -229,9 +291,7 @@ def _rs_out(rs: RacingSession, lap_count: int, best_lap: float | None) -> Racing
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
 @router.post("/", response_model=RacingSessionOut, status_code=201)
-def create_racing_session(body: RacingSessionCreate, db: Session = Depends(get_db)):
-    from app.models.session import Simulator, SessionType
-
+def create_racing_session(body: RacingSessionCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     sim = None
     if body.simulator:
         try:
@@ -247,7 +307,7 @@ def create_racing_session(body: RacingSessionCreate, db: Session = Depends(get_d
             raise HTTPException(status_code=422, detail=f"Tipo de sesión inválido: {body.session_type}")
 
     rs = RacingSession(
-        user_id=PLACEHOLDER_USER_ID,
+        user_id=current_user.id,
         name=body.name,
         track=body.track.strip() if body.track else None,
         car=body.car.strip() if body.car else None,
@@ -267,10 +327,11 @@ def update_racing_session(
     racing_session_id: uuid.UUID,
     body: RacingSessionUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     from app.models.session import Simulator, SessionType
 
-    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
@@ -293,6 +354,7 @@ def update_racing_session(
         except ValueError:
             raise HTTPException(status_code=422, detail=f"Tipo de sesión inválido: {body.session_type}")
 
+
     rs.report_cache = None  # invalidar caché al editar
     db.commit()
     db.refresh(rs)
@@ -306,8 +368,8 @@ def update_racing_session(
 
 
 @router.delete("/{racing_session_id}", status_code=204)
-def delete_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(get_db)):
-    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+def delete_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
     db.delete(rs)  # cascade elimina TelemetrySessions por el modelo
@@ -315,7 +377,7 @@ def delete_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(ge
 
 
 @router.get("/", response_model=list[RacingSessionOut])
-def list_racing_sessions(db: Session = Depends(get_db)):
+def list_racing_sessions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     rows = (
         db.query(
             RacingSession,
@@ -323,7 +385,7 @@ def list_racing_sessions(db: Session = Depends(get_db)):
             func.min(TelemetrySession.lap_time).label("best_lap"),
         )
         .outerjoin(TelemetrySession, TelemetrySession.racing_session_id == RacingSession.id)
-        .filter(RacingSession.user_id == PLACEHOLDER_USER_ID)
+        .filter(RacingSession.user_id == current_user.id)
         .group_by(RacingSession.id)
         .order_by(RacingSession.created_at.desc())
         .all()
@@ -333,8 +395,8 @@ def list_racing_sessions(db: Session = Depends(get_db)):
 
 
 @router.get("/{racing_session_id}", response_model=RacingSessionDetail)
-def get_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(get_db)):
-    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+def get_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
@@ -388,12 +450,12 @@ def get_racing_session(racing_session_id: uuid.UUID, db: Session = Depends(get_d
 
 
 @router.get("/{racing_session_id}/report")
-def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
     """
     Devuelve el reporte de 11 secciones. Usa caché guardado en BD si existe.
     Se regenera solo si no hay caché (nueva sesión o fue invalidado).
     """
-    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
@@ -407,15 +469,12 @@ def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_d
 
 
 @router.get("/{racing_session_id}/pdf")
-def download_session_pdf(racing_session_id: uuid.UUID, db: Session = Depends(get_db)):
+def download_session_pdf(racing_session_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Genera y descarga el PDF desde el reporte cacheado (mismo contenido que la web).
     Si no hay caché, genera el reporte primero.
     """
-    from pathlib import Path
-    from app.core.config import settings
-
-    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
@@ -424,6 +483,16 @@ def download_session_pdf(racing_session_id: uuid.UUID, db: Session = Depends(get
         report = _generate_report(rs, db)
         rs.report_cache = report
         db.commit()
+
+    # Inject telemetry points for charts (not cached — computed on demand)
+    try:
+        lap_telem = _best_lap_with_csv_and_data(racing_session_id, db)
+        if lap_telem:
+            report = dict(report)  # shallow copy so cache is not mutated
+            report["section_telemetry_points"] = lap_telem["points"]
+            report["section_telemetry_lap_fmt"] = lap_telem["lap_time_fmt"]
+    except Exception:
+        pass
 
     out_dir = Path(settings.pdf_data_path)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -435,7 +504,8 @@ def download_session_pdf(racing_session_id: uuid.UUID, db: Session = Depends(get
     try:
         generate_report_pdf(report, pdf_path)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error generando PDF: {exc}")
+        logger.error("Error generando PDF para sesión %s: %s", racing_session_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Error generando el PDF. Intenta de nuevo.")
 
     filename = f"delta_{safe_track}_{best_fmt}.pdf"
     return FileResponse(path=str(pdf_path), media_type="application/pdf", filename=filename)
@@ -446,24 +516,25 @@ async def upload_setup(
     racing_session_id: uuid.UUID,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """
     Sube un archivo .ini de setup de AC a una RacingSession.
     Parsea el archivo, guarda el dict en setup_data e invalida el report_cache.
     """
-    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
     if not file.filename or not file.filename.lower().endswith(".ini"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos .ini")
 
-    tmp = Path("/tmp") / f"{_uuid_mod.uuid4()}.ini"
-    try:
-        with tmp.open("wb") as buf:
-            shutil.copyfileobj(file.file, buf)
-    finally:
-        await file.close()
+    content = await file.read()
+    if len(content) > _MAX_SETUP_SIZE:
+        raise HTTPException(status_code=400, detail="El archivo es demasiado grande (máx 2MB)")
+
+    tmp = Path("/tmp") / f"{uuid.uuid4()}.ini"
+    tmp.write_bytes(content)
 
     setup = parse_setup(tmp)
     tmp.unlink(missing_ok=True)
@@ -478,9 +549,10 @@ async def upload_setup(
     return {"ok": True, "sections": list(setup.keys())}
 
 
-_TRACK_MAP_DIR = Path("/data/track_maps")
+_TRACK_MAP_DIR = Path(settings.track_maps_path)
 _ALLOWED_MAP_EXTS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
-_MAX_MAP_SIZE = 5 * 1024 * 1024  # 5MB
+_MAX_MAP_SIZE = 5 * 1024 * 1024    # 5MB
+_MAX_SETUP_SIZE = 2 * 1024 * 1024  # 2MB
 
 
 @router.post("/{racing_session_id}/track-map", status_code=200)
@@ -488,13 +560,14 @@ async def upload_track_map(
     racing_session_id: uuid.UUID,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """
     Sube el mapa del circuito (PNG/JPG/SVG) a una RacingSession.
     El mapa se guarda en disco y se asocia al TrackInfo del circuito
     (es reutilizable entre todas las sesiones del mismo circuito).
     """
-    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
@@ -533,18 +606,17 @@ async def upload_track_map(
 
 
 @router.get("/{racing_session_id}/track-map")
-def get_track_map(racing_session_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_track_map(racing_session_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """
     Descarga el mapa del circuito asociado a la sesión.
     """
-    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=PLACEHOLDER_USER_ID).first()
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
     if not rs:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
     if not rs.track:
         raise HTTPException(status_code=404, detail="Sin circuito asignado")
 
-    from app.services.tracks.track_normalizer import normalize_track_id
     normalized = normalize_track_id(rs.track)
 
     ti = db.get(TrackInfo, normalized)
@@ -571,10 +643,10 @@ def get_track_map(racing_session_id: uuid.UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/compare")
-def compare_sessions(body: CompareRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+def compare_sessions(body: CompareRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> dict[str, Any]:
     # Cargar ambas sesiones
-    rs_a = db.query(RacingSession).filter_by(id=body.session_a_id, user_id=PLACEHOLDER_USER_ID).first()
-    rs_b = db.query(RacingSession).filter_by(id=body.session_b_id, user_id=PLACEHOLDER_USER_ID).first()
+    rs_a = db.query(RacingSession).filter_by(id=body.session_a_id, user_id=current_user.id).first()
+    rs_b = db.query(RacingSession).filter_by(id=body.session_b_id, user_id=current_user.id).first()
 
     if not rs_a or not rs_b:
         raise HTTPException(status_code=404, detail="Una o ambas sesiones no encontradas")
@@ -668,4 +740,214 @@ def compare_sessions(body: CompareRequest, db: Session = Depends(get_db)) -> dic
         "metrics_a": _metrics(best_a, pre_a),
         "metrics_b": _metrics(best_b, pre_b),
         "ai_comparison": ai_comparison,
+    }
+
+
+@router.get("/{racing_session_id}/delta-map")
+def get_delta_map(
+    racing_session_id: uuid.UUID,
+    ref: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    Genera el mapa de delta de velocidad entre la mejor vuelta de esta sesión (A)
+    y la mejor vuelta de la sesión de referencia (B).
+
+    Returns 300 puntos con coordenadas X/Z y delta de velocidad normalizado.
+    """
+    N = 300
+
+    # ── Cargar sesiones ──────────────────────────────────────────────────────
+    rs_a = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
+    if not rs_a:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    rs_b = db.query(RacingSession).filter_by(id=ref, user_id=current_user.id).first()
+    if not rs_b:
+        raise HTTPException(status_code=404, detail="Sesión de referencia no encontrada")
+
+    # ── Validar mismo circuito ───────────────────────────────────────────────
+    if rs_a.track != rs_b.track:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Las sesiones deben ser del mismo circuito ({rs_a.track} vs {rs_b.track})",
+        )
+
+    # ── Best lap con csv_path para cada sesión ───────────────────────────────
+    def _best_lap_with_csv(rs_id: uuid.UUID) -> TelemetrySession | None:
+        return (
+            db.query(TelemetrySession)
+            .filter(
+                TelemetrySession.racing_session_id == rs_id,
+                TelemetrySession.csv_path.isnot(None),
+            )
+            .order_by(TelemetrySession.lap_time)
+            .first()
+        )
+
+    lap_a = _best_lap_with_csv(racing_session_id)
+    lap_b = _best_lap_with_csv(ref)
+
+    if not lap_a:
+        raise HTTPException(status_code=404, detail="La sesión A no tiene vueltas con telemetría CSV")
+    if not lap_b:
+        raise HTTPException(status_code=404, detail="La sesión de referencia no tiene vueltas con telemetría CSV")
+
+    # ── Parsear CSVs ─────────────────────────────────────────────────────────
+    parsed_a = parse_csv(lap_a.csv_path)
+    parsed_b = parse_csv(lap_b.csv_path)
+
+    if parsed_a is None:
+        raise HTTPException(status_code=422, detail="No se pudo parsear el CSV de la sesión A")
+    if parsed_b is None:
+        raise HTTPException(status_code=422, detail="No se pudo parsear el CSV de la sesión de referencia")
+
+    # ── Preparar DataFrames ──────────────────────────────────────────────────
+    def _prepare_df(df):
+        required = {"x", "z", "lap_distance", "speed"}
+        missing = required - set(df.columns)
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=f"El CSV no contiene las columnas requeridas: {missing}",
+            )
+        df = df[["x", "z", "lap_distance", "speed"]].dropna()
+        df = df.sort_values("lap_distance").reset_index(drop=True)
+        if df.empty or df["lap_distance"].max() <= 0:
+            raise HTTPException(status_code=422, detail="El CSV no tiene datos de posición válidos")
+        df["d"] = df["lap_distance"] / df["lap_distance"].max()
+        return df
+
+    df_a = _prepare_df(parsed_a.telemetry)
+    df_b = _prepare_df(parsed_b.telemetry)
+
+    # ── Resamplear a N puntos equiespaciados ─────────────────────────────────
+    d_uniform = np.linspace(0.0, 1.0, N)
+
+    x_a      = np.interp(d_uniform, df_a["d"].values, df_a["x"].values)
+    z_a      = np.interp(d_uniform, df_a["d"].values, df_a["z"].values)
+    speed_a  = np.interp(d_uniform, df_a["d"].values, df_a["speed"].values)
+
+    x_b      = np.interp(d_uniform, df_b["d"].values, df_b["x"].values)  # noqa: F841
+    z_b      = np.interp(d_uniform, df_b["d"].values, df_b["z"].values)  # noqa: F841
+    speed_b  = np.interp(d_uniform, df_b["d"].values, df_b["speed"].values)
+
+    # ── Calcular delta ───────────────────────────────────────────────────────
+    delta = speed_a - speed_b  # positivo = A más rápido
+
+    max_abs = float(np.abs(delta).max())
+    if max_abs < 1.0:
+        max_abs = 1.0
+    delta_norm = np.clip(delta / max_abs, -1.0, 1.0)
+
+    # ── Serializar puntos ────────────────────────────────────────────────────
+    points = [
+        {
+            "x":          float(x_a[i]),
+            "z":          float(z_a[i]),
+            "delta":      float(delta[i]),
+            "delta_norm": float(delta_norm[i]),
+            "speed_a":    float(speed_a[i]),
+            "speed_b":    float(speed_b[i]),
+        }
+        for i in range(N)
+    ]
+
+    return {
+        "points": points,
+        "session_a": {
+            "id":           str(rs_a.id),
+            "track":        rs_a.track,
+            "best_lap_fmt": _fmt(lap_a.lap_time),
+            "lap_time":     lap_a.lap_time,
+        },
+        "session_b": {
+            "id":           str(rs_b.id),
+            "track":        rs_b.track,
+            "best_lap_fmt": _fmt(lap_b.lap_time),
+            "lap_time":     lap_b.lap_time,
+        },
+        "delta_total": lap_a.lap_time - lap_b.lap_time,
+    }
+
+
+@router.get("/{racing_session_id}/lap-telemetry")
+def get_lap_telemetry(
+    racing_session_id: uuid.UUID,
+    n: int = 500,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    Retorna los datos de telemetría de la mejor vuelta de la sesión,
+    resampleados a N puntos equiespaciados por distancia.
+    Incluye: x, z, speed, throttle, brake, gear.
+    """
+    rs = db.query(RacingSession).filter_by(id=racing_session_id, user_id=current_user.id).first()
+    if not rs:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    lap = (
+        db.query(TelemetrySession)
+        .filter(
+            TelemetrySession.racing_session_id == racing_session_id,
+            TelemetrySession.csv_path.isnot(None),
+        )
+        .order_by(TelemetrySession.lap_time)
+        .first()
+    )
+    if not lap:
+        raise HTTPException(status_code=404, detail="No hay vueltas con telemetría CSV")
+
+    parsed = parse_csv(lap.csv_path)
+    if parsed is None:
+        raise HTTPException(status_code=422, detail="No se pudo parsear el CSV")
+
+    df = parsed.telemetry
+    required = {"x", "z", "lap_distance", "speed"}
+    missing = required - set(df.columns)
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Columnas faltantes: {missing}")
+
+    optional = {"throttle", "brake", "gear"}
+    cols = list(required | (optional & set(df.columns)))
+    df = df[cols].dropna(subset=list(required))
+    df = df.sort_values("lap_distance").reset_index(drop=True)
+    if df.empty or df["lap_distance"].max() <= 0:
+        raise HTTPException(status_code=422, detail="Datos de posición inválidos")
+
+    d_norm = df["lap_distance"] / df["lap_distance"].max()
+    d_uniform = np.linspace(0.0, 1.0, n)
+
+    def interp(col: str, default: float = 0.0) -> list[float]:
+        if col in df.columns:
+            return np.interp(d_uniform, d_norm.values, df[col].values).tolist()
+        return [default] * n
+
+    x_vals      = interp("x")
+    z_vals      = interp("z")
+    speed_vals  = interp("speed")
+    throttle_v  = interp("throttle")
+    brake_v     = interp("brake")
+    gear_raw    = interp("gear")
+
+    points = [
+        {
+            "d":        float(d_uniform[i]),
+            "x":        x_vals[i],
+            "z":        z_vals[i],
+            "speed":    speed_vals[i],
+            "throttle": throttle_v[i],
+            "brake":    brake_v[i],
+            "gear":     int(round(max(0, min(8, gear_raw[i])))),
+        }
+        for i in range(n)
+    ]
+
+    return {
+        "lap_time":     lap.lap_time,
+        "lap_time_fmt": _fmt(lap.lap_time),
+        "lap_number":   lap.lap_number,
+        "points":       points,
     }
