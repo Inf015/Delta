@@ -98,7 +98,7 @@ def compute(lap: ParsedLap) -> dict:
     for corner in ("fl", "fr", "rl", "rr"):
         s = _series(df, f"tyre_temp_{corner}")
         if s is not None:
-            hot = s[s > 20]  # 20°C mínimo para excluir valores placeholder (0-4°C)
+            hot = s[s > 10]  # >10°C para excluir placeholders (0-4°C) sin filtrar días fríos
             if not hot.empty:
                 tyre_temp[corner.upper()] = {
                     "avg": round(float(hot.mean()), 1),
@@ -117,16 +117,16 @@ def compute(lap: ParsedLap) -> dict:
         zone: dict = {}
         inner_avg = outer_avg = None
         if inner_s is not None:
-            hot = inner_s[inner_s > 20]
+            hot = inner_s[inner_s > 10]
             if not hot.empty:
                 inner_avg = float(hot.mean())
                 zone["inner"] = round(inner_avg, 1)
         if mid_s is not None:
-            hot = mid_s[mid_s > 20]
+            hot = mid_s[mid_s > 10]
             if not hot.empty:
                 zone["mid"] = round(float(hot.mean()), 1)
         if outer_s is not None:
-            hot = outer_s[outer_s > 20]
+            hot = outer_s[outer_s > 10]
             if not hot.empty:
                 outer_avg = float(hot.mean())
                 zone["outer"] = round(outer_avg, 1)
@@ -376,7 +376,7 @@ def compute(lap: ParsedLap) -> dict:
     for corner in ("fl", "fr", "rl", "rr"):
         s = _series(df, f"tyre_carcass_{corner}")
         if s is not None:
-            hot = s[s > 20]
+            hot = s[s > 10]
             if not hot.empty:
                 tyre_carcass[corner.upper()] = {
                     "avg": round(float(hot.mean()), 1),

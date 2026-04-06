@@ -835,11 +835,11 @@ export default function ReportView({ report, sessionId, backHref, backLabel = '�
       <SectionHeader num={2} title="Tiempos por Vuelta" /><Section2 laps={report.section_2_lap_table} />
       <SectionHeader num={3} title="Consistency Score" /><Section3 s={report.section_3_consistency} />
       <SectionHeader num={4} title="Análisis de Gomas" />
-      {Object.keys(report.section_4_tyres).length > 0 ? <Section4 s={report.section_4_tyres} /> : <NoData msg="El CSV no incluye datos de temperatura/presión de gomas." />}
+      {Object.keys(report.section_4_tyres).length > 0 ? <Section4 s={report.section_4_tyres} /> : <NoData msg="Datos de gomas no disponibles para esta vuelta (posible pit lap o vuelta incompleta)." />}
       <SectionHeader num={5} title="Análisis de Frenos" />
       <Section5 s={report.section_5_brakes} />
       <SectionHeader num={6} title="G-Forces y Dinámica del Vehículo" />
-      {Object.keys(report.section_6_dynamics).length > 0 ? <Section6 s={report.section_6_dynamics} /> : <NoData msg="El CSV no incluye datos de G-forces o suspensión." />}
+      {Object.keys(report.section_6_dynamics).length > 0 ? <Section6 s={report.section_6_dynamics} /> : <NoData msg="Datos de dinámica no disponibles para esta vuelta (posible pit lap o vuelta incompleta)." />}
       <SectionHeader num={7} title="Setup Utilizado en Esta Sesión" /><Section7 s={report.section_7_setup} />
       {report.section_8_technical && <><SectionHeader num={8} title="Análisis Técnico Detallado" /><Section8 s={report.section_8_technical} /></>}
       {report.section_9_opportunities && report.section_9_opportunities.length > 0 && <><SectionHeader num={9} title="Top 5 Oportunidades de Mejora" /><Section9 opps={report.section_9_opportunities} /></>}
