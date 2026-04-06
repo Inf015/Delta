@@ -250,9 +250,11 @@ export interface SessionReport {
     overheating_risk?: string[]
   }
   section_5_brakes: {
+    pressure?: { avg_pct: number | null; max_pct: number | null; hard_pct: number | null }
     temp?: Record<string, { avg: number; max: number }>
     balance?: { front_avg: number; rear_avg: number; bias: string }
     warning?: string
+    temp_note?: string
     zones?: Array<{ dist_m: number; speed_kmh: number; intensity: number }>
   }
   section_6_dynamics: {

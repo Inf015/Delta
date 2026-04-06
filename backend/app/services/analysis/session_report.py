@@ -256,8 +256,19 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
     # ── Sección 5: Análisis de frenos ─────────────────────────────────────────
     brake_temp    = best_pre.get("brake_temp", {})
     brake_balance = best_pre.get("brake_balance", {})
+    brake_raw     = best_pre.get("brake", {})
 
     brake_analysis: dict[str, Any] = {}
+
+    # Presión/intensidad de freno — siempre disponible desde el canal brake [%]
+    if brake_raw:
+        brake_analysis["pressure"] = {
+            "avg_pct":  brake_raw.get("avg"),
+            "max_pct":  brake_raw.get("max"),
+            "hard_pct": brake_raw.get("hard_pct"),
+        }
+
+    # Temperatura — solo si el simulador la modela (no placeholder 4°C)
     if brake_temp:
         brake_analysis["temp"] = brake_temp
     if brake_balance:
@@ -277,6 +288,10 @@ def compute(laps: list[dict], setup_data: dict | None = None, track_info: dict |
                 f"({r_avg:.0f}°C vs {f_avg:.0f}°C) "
                 f"— considera mover brake bias hacia delante."
             )
+
+    # Nota informativa cuando no hay temperatura real
+    if not brake_temp:
+        brake_analysis["temp_note"] = "Este auto/simulador no exporta temperatura de frenos."
 
     braking_zones = best_pre.get("braking_zones", [])
     if braking_zones:

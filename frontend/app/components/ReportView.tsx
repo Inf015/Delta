@@ -404,8 +404,34 @@ function Section5({ s }: { s: SessionReport['section_5_brakes'] }) {
 
   return (
     <div className="space-y-4">
+
+      {/* Presión/intensidad — siempre disponible */}
+      {s.pressure && (
+        <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Uso de freno:</p>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="border border-gray-800 p-3 text-center">
+              <p className="text-gray-500 mb-1">Intensidad máx.</p>
+              <p className="text-white font-mono text-base font-bold">{s.pressure.max_pct ?? '—'}%</p>
+            </div>
+            <div className="border border-gray-800 p-3 text-center">
+              <p className="text-gray-500 mb-1">Promedio</p>
+              <p className="text-white font-mono text-base font-bold">{s.pressure.avg_pct ?? '—'}%</p>
+            </div>
+            <div className="border border-gray-800 p-3 text-center">
+              <p className="text-gray-500 mb-1">Frenada fuerte (&gt;80%)</p>
+              <p className={`font-mono text-base font-bold ${(s.pressure.hard_pct ?? 0) > 10 ? 'text-orange-400' : 'text-green-400'}`}>
+                {s.pressure.hard_pct ?? '—'}%
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Temperatura — cuando el simulador la modela */}
       {s.temp && (
         <div>
+          <p className="text-gray-500 text-xs uppercase tracking-wide mb-2 font-bold">Temperatura de frenos:</p>
           <TwoColTable
             headers={['Métrica', 'FL', 'FR', 'RL', 'RR']}
             rows={[
@@ -414,6 +440,10 @@ function Section5({ s }: { s: SessionReport['section_5_brakes'] }) {
             ]}
           />
         </div>
+      )}
+
+      {s.temp_note && !s.temp && (
+        <p className="text-gray-600 text-xs italic">{s.temp_note}</p>
       )}
 
       {/* Balance delantero/trasero */}
@@ -807,7 +837,7 @@ export default function ReportView({ report, sessionId, backHref, backLabel = '�
       <SectionHeader num={4} title="Análisis de Gomas" />
       {Object.keys(report.section_4_tyres).length > 0 ? <Section4 s={report.section_4_tyres} /> : <NoData msg="El CSV no incluye datos de temperatura/presión de gomas." />}
       <SectionHeader num={5} title="Análisis de Frenos" />
-      {Object.keys(report.section_5_brakes).length > 0 ? <Section5 s={report.section_5_brakes} /> : <NoData msg="El CSV no incluye datos de temperatura de frenos." />}
+      <Section5 s={report.section_5_brakes} />
       <SectionHeader num={6} title="G-Forces y Dinámica del Vehículo" />
       {Object.keys(report.section_6_dynamics).length > 0 ? <Section6 s={report.section_6_dynamics} /> : <NoData msg="El CSV no incluye datos de G-forces o suspensión." />}
       <SectionHeader num={7} title="Setup Utilizado en Esta Sesión" /><Section7 s={report.section_7_setup} />
