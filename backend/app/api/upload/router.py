@@ -135,6 +135,7 @@ async def upload_csv(
 
     created_sessions: list[SessionOut] = []
     committed_csv_paths: list[Path] = []  # para limpieza si la transacción falla
+    pending_task_ids: list[str] = []       # IDs a despachar a Celery DESPUÉS del commit
     skipped = 0
     duplicates = 0
     session_meta_filled = False  # solo auto-llenamos una vez
@@ -224,7 +225,8 @@ async def upload_csv(
             # Invalidar caché del reporte al agregar nuevas vueltas
             rs.report_cache = None
 
-            process_session.delay(str(lap.id))
+            # Acumular — el dispatch ocurre DESPUÉS del commit para evitar race condition
+            pending_task_ids.append(str(lap.id))
         except Exception:
             # Limpiar todos los CSVs movidos en este request (la transacción se revierte)
             for p in committed_csv_paths:
@@ -255,6 +257,10 @@ async def upload_csv(
         for p in committed_csv_paths:
             p.unlink(missing_ok=True)
         raise
+
+    # Despachar tasks DESPUÉS del commit — las filas ya son visibles en la DB
+    for session_id in pending_task_ids:
+        process_session.delay(session_id)
 
     if not created_sessions:
         if duplicates > 0:
