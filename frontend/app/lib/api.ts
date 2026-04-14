@@ -396,6 +396,17 @@ function authHeader(): Record<string, string> {
   }
 }
 
+/** Si la respuesta es 401, limpia la sesión y redirige a /login. */
+function handleUnauthorized(res: Response): void {
+  if (res.status === 401 && typeof window !== 'undefined') {
+    localStorage.removeItem('delta_token')
+    localStorage.removeItem('delta_email')
+    localStorage.removeItem('delta_admin')
+    localStorage.removeItem('delta_role')
+    window.location.href = '/login'
+  }
+}
+
 // ── Auth functions ────────────────────────────────────────────────────────────
 
 export async function login(email: string, password: string): Promise<AuthResult> {
@@ -451,6 +462,7 @@ export async function createRacingSession(data: Partial<{
     body: JSON.stringify(data),
   })
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al crear sesión')
   }
@@ -471,6 +483,7 @@ export async function updateRacingSession(id: string, data: Partial<{
     body: JSON.stringify(data),
   })
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al actualizar sesión')
   }
@@ -495,6 +508,7 @@ export async function uploadCSVs(files: File[], racingSessionId: string): Promis
     throw new Error('Error de red al subir archivos. Revisa tu conexión.')
   }
   if (!res.ok) {
+    handleUnauthorized(res)
     if (res.status === 413) throw new Error('Archivos demasiado grandes. Súbelos de a pocos (máx ~400MB total).')
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al subir archivos')
@@ -504,25 +518,26 @@ export async function uploadCSVs(files: File[], racingSessionId: string): Promis
 
 export async function getSessions(): Promise<Session[]> {
   const res = await fetch(`${API}/api/v1/sessions/`, { cache: 'no-store', headers: { ...authHeader() } })
-  if (!res.ok) return []
+  if (!res.ok) { handleUnauthorized(res); return [] }
   return res.json()
 }
 
 export async function getAnalysis(sessionId: string): Promise<Analysis | null> {
   const res = await fetch(`${API}/api/v1/sessions/${sessionId}/analysis`, { cache: 'no-store', headers: { ...authHeader() } })
-  if (!res.ok) return null
+  if (!res.ok) { handleUnauthorized(res); return null }
   return res.json()
 }
 
 export async function getRacingSessions(): Promise<RacingSession[]> {
   const res = await fetch(`${API}/api/v1/racing-sessions/`, { cache: 'no-store', headers: { ...authHeader() } })
-  if (!res.ok) return []
+  if (!res.ok) { handleUnauthorized(res); return [] }
   return res.json()
 }
 
 export async function deleteRacingSession(id: string): Promise<void> {
   const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, { method: 'DELETE', headers: { ...authHeader() } })
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al eliminar sesión')
   }
@@ -530,13 +545,13 @@ export async function deleteRacingSession(id: string): Promise<void> {
 
 export async function getRacingSession(id: string): Promise<RacingSessionDetail | null> {
   const res = await fetch(`${API}/api/v1/racing-sessions/${id}`, { cache: 'no-store', headers: { ...authHeader() } })
-  if (!res.ok) return null
+  if (!res.ok) { handleUnauthorized(res); return null }
   return res.json()
 }
 
 export async function getSessionReport(id: string): Promise<SessionReport | null> {
   const res = await fetch(`${API}/api/v1/racing-sessions/${id}/report`, { cache: 'no-store', headers: { ...authHeader() } })
-  if (!res.ok) return null
+  if (!res.ok) { handleUnauthorized(res); return null }
   return res.json()
 }
 
@@ -549,6 +564,7 @@ export async function uploadSetup(racingSessionId: string, file: File): Promise<
   form.append('file', file)
   const res = await fetch(`${API}/api/v1/racing-sessions/${racingSessionId}/setup`, { method: 'POST', headers: { ...authHeader() }, body: form })
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al subir setup')
   }
@@ -560,6 +576,7 @@ export async function uploadTrackMap(racingSessionId: string, file: File): Promi
   form.append('file', file)
   const res = await fetch(`${API}/api/v1/racing-sessions/${racingSessionId}/track-map`, { method: 'POST', headers: { ...authHeader() }, body: form })
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error al subir mapa')
   }
@@ -577,6 +594,7 @@ export async function compareRacingSessions(aId: string, bId: string): Promise<C
     body: JSON.stringify({ session_a_id: aId, session_b_id: bId }),
   })
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || 'Error al comparar sesiones')
   }
@@ -607,6 +625,7 @@ export async function getDeltaMap(sessionId: string, refId: string): Promise<Del
     { headers: { ...authHeader() } }
   )
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({}))
     throw new Error((err as { detail?: string }).detail || 'Error al calcular delta map')
   }
@@ -637,7 +656,7 @@ export async function getLapTelemetry(sessionId: string): Promise<LapTelemetry |
     `${API}/api/v1/racing-sessions/${sessionId}/lap-telemetry`,
     { headers: { ...authHeader() } }
   )
-  if (!res.ok) return null
+  if (!res.ok) { handleUnauthorized(res); return null }
   return res.json()
 }
 
@@ -649,6 +668,7 @@ async function adminFetch(path: string, options: RequestInit = {}): Promise<Resp
     headers: { ...authHeader(), ...(options.headers as Record<string, string> || {}) },
   })
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error en el servidor')
   }
@@ -705,6 +725,7 @@ async function teamFetch(path: string, options: RequestInit = {}): Promise<Respo
     },
   })
   if (!res.ok) {
+    handleUnauthorized(res)
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(typeof err.detail === 'string' ? err.detail : 'Error en el servidor')
   }

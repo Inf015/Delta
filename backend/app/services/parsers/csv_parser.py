@@ -240,7 +240,7 @@ def parse_csv(path: str | Path) -> Optional[ParsedLap]:
         return None
 
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
             lines = [f.readline() for _ in range(8)]
     except OSError:
         return None
@@ -279,11 +279,13 @@ def parse_csv(path: str | Path) -> Optional[ParsedLap]:
     car      = _get(meta_hdr, meta_val, "car")
     event    = _get(meta_hdr, meta_val, "event")
     date     = _get(meta_hdr, meta_val, "date")
-    lap_num  = int(_float(_get(meta_hdr, meta_val, "lap", "1"))) or 1
 
     # ── Líneas 4-5: track ────────────────────────────────────────────────────
     track_hdr = [p.strip() for p in lines[3].split(",")]
     track_val = [p.strip() for p in lines[4].split(",")]
+
+    # "Lap [int]" como clave específica evita match con "Pitlap [b]" o "LapsInRace [int]"
+    lap_num  = int(_float(_get(track_hdr, track_val, "Lap [int]", "1"))) or 1
 
     track_len   = _float(_get(track_hdr, track_val, "Tracklen"))
     tyre        = _get(track_hdr, track_val, "Tyre")
@@ -323,7 +325,8 @@ def parse_csv(path: str | Path) -> Optional[ParsedLap]:
     # ── Línea 8+: telemetría ──────────────────────────────────────────────────
     try:
         # skiprows=7 salta líneas 1-7, dejando línea 8 (telemetry header) como header=0
-        df = pd.read_csv(path, skiprows=7, header=0, encoding="utf-8", on_bad_lines="skip")
+        # utf-8-sig consume el BOM si lo hay, evitando que la primera columna quede corrupta
+        df = pd.read_csv(path, skiprows=7, header=0, encoding="utf-8-sig", on_bad_lines="skip")
     except Exception:
         return None
 
@@ -337,9 +340,13 @@ def parse_csv(path: str | Path) -> Optional[ParsedLap]:
     for col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Filtrar puntos dentro de pits si hay columna
+    # Filtrar puntos dentro de pits si hay columna.
+    # fillna(0) trata valores no parseables como "no en pits" para no descartar filas válidas.
     if "in_pits" in df.columns:
-        df = df[df["in_pits"] == 0]
+        df = df[df["in_pits"].fillna(0) == 0]
+
+    if df.empty:
+        return None
 
     meta = LapMeta(
         simulator    = sim_raw,

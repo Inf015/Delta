@@ -2,9 +2,19 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
-import { isAuthenticated } from '../lib/auth'
+import { getToken, removeToken } from '../lib/auth'
 
 const PUBLIC_PATHS = ['/login', '/register']
+
+/** Decodifica el payload JWT sin verificar la firma (solo para leer el exp). */
+function isTokenExpired(token: string): boolean {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return typeof payload.exp === 'number' && payload.exp * 1000 < Date.now()
+  } catch {
+    return true
+  }
+}
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -16,7 +26,9 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       setChecked(true)
       return
     }
-    if (!isAuthenticated()) {
+    const token = getToken()
+    if (!token || isTokenExpired(token)) {
+      removeToken()
       router.replace('/login')
     } else {
       setChecked(true)
