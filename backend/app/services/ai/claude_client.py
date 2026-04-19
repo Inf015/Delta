@@ -386,13 +386,14 @@ def _build_pilot_style_block(profile: KnowledgeProfile | None) -> str:
         pct = int(hc.get(dominant, 0) / total * 100)
         lines.append(f"  Manejo dominante: {dominant} ({pct}% de {total} sesiones)")
 
-    # Tendencia de subviraje
+    # Tendencia de subviraje (escala en grados de volante, mayor = más subviraje)
     uh = ds.get("understeer_history", [])
     if len(uh) >= 2:
         avg_us = sum(uh) / len(uh)
         trend_us = uh[-1] - uh[0]
-        direction = "↑ aumentando" if trend_us > 0.05 else ("↓ mejorando" if trend_us < -0.05 else "→ estable")
-        lines.append(f"  Understeer score promedio: {avg_us:.2f}/1.0 — tendencia {direction} ({len(uh)} sesiones)")
+        direction = "↑ aumentando" if trend_us > 1.0 else ("↓ mejorando" if trend_us < -1.0 else "→ estable")
+        level = "alto" if avg_us > 15 else ("medio" if avg_us > 8 else "bajo")
+        lines.append(f"  Understeer promedio: {avg_us:.1f}° ({level}) — tendencia {direction} ({len(uh)} sesiones)")
 
     # Patrón de throttle
     th = ds.get("throttle_history", [])

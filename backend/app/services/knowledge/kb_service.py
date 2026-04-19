@@ -146,31 +146,33 @@ def update_profile(
         hc[handling] = hc.get(handling, 0) + 1
         ds["handling_counts"] = hc
 
-    # Historial understeer score (últimas 15 sesiones)
-    us = pre_analysis.get("understeer_score")
+    # Historial understeer score — en pre_analysis está en steering.understeer_score
+    us = (pre_analysis.get("steering") or {}).get("understeer_score")
     if us is not None:
         uh = ds.get("understeer_history", [])
-        uh.append(round(float(us), 3))
+        uh.append(round(float(us), 2))
         ds["understeer_history"] = uh[-15:]
 
-    # Historial throttle promedio
-    thr = pre_analysis.get("avg_throttle_pct")
+    # Historial throttle promedio — en pre_analysis está en throttle.avg
+    thr = (pre_analysis.get("throttle") or {}).get("avg")
     if thr is not None:
         th = ds.get("throttle_history", [])
         th.append(round(float(thr), 1))
         ds["throttle_history"] = th[-15:]
 
-    # Historial G frenada máxima
-    bg = pre_analysis.get("g_lon_brake_max")
+    # Historial G frenada máxima — en pre_analysis está en g_forces.lon_max_brake
+    bg = (pre_analysis.get("g_forces") or {}).get("lon_max_brake")
     if bg is not None:
         bh = ds.get("brake_g_history", [])
         bh.append(round(abs(float(bg)), 3))
         ds["brake_g_history"] = bh[-15:]
 
-    # Historial slip trasero promedio
+    # Historial slip trasero promedio — slip.RL.avg y slip.RR.avg
     slip = pre_analysis.get("slip")
     if isinstance(slip, dict):
-        rear_slip = ((slip.get("avg_rl") or 0) + (slip.get("avg_rr") or 0)) / 2
+        rl_avg = (slip.get("RL") or {}).get("avg") or 0
+        rr_avg = (slip.get("RR") or {}).get("avg") or 0
+        rear_slip = (rl_avg + rr_avg) / 2
         if rear_slip > 0:
             sh = ds.get("slip_rear_history", [])
             sh.append(round(rear_slip, 3))
