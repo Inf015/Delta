@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.deps import get_current_user, get_db
 from app.models.analysis import Analysis
+from app.models.knowledge import KnowledgeProfile
 from app.models.racing_session import RacingSession
 from app.models.session import SessionType, Simulator, TelemetrySession
 from app.models.track_info import TrackInfo
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Bump this when the report schema changes (new sections/fields).
 # Any cached report with a different version is automatically regenerated.
-_REPORT_CACHE_VERSION = 2
+_REPORT_CACHE_VERSION = 3
 
 
 def _generate_report(rs: RacingSession, db: Session, user_plan: str = "free") -> dict:
@@ -105,12 +106,27 @@ def _generate_report(rs: RacingSession, db: Session, user_plan: str = "free") ->
     report = sr.compute(laps_data, setup_data=rs.setup_data, track_info=track_info_dict)
     best_pre = min(laps_data, key=lambda l: l["lap_time"]).get("pre_analysis") or {}
 
+    # Perfil del piloto para esta combinación pista+auto+sim
+    pilot_profile = None
+    if rs.track and rs.car and rs.simulator:
+        pilot_profile = (
+            db.query(KnowledgeProfile)
+            .filter_by(
+                user_id=rs.user_id,
+                track=rs.track,
+                car=rs.car,
+                simulator=rs.simulator.value,
+            )
+            .first()
+        )
+
     ai_sections, tok_in, tok_out = claude_client.analyze_session(
         session_summary=report.get("section_1_summary", {}),
         best_lap_pre=best_pre,
         setup_data=rs.setup_data,
         track_info=track_info_dict,
         prev_setup=prev_setup,
+        profile=pilot_profile,
         plan=user_plan,
     )
     report.update(ai_sections)

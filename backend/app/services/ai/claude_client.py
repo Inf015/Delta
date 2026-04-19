@@ -369,6 +369,70 @@ def get_track_info_from_claude(track_id: str, track_length_m: float | None = Non
     return result
 
 
+def _build_pilot_style_block(profile: KnowledgeProfile | None) -> str:
+    """Construye el bloque de estilo de pilotaje para el prompt de sesión."""
+    if profile is None:
+        return ""
+
+    lines = ["\nPERFIL DE ESTILO DEL PILOTO (acumulado sin IA, solo matemáticas):"]
+
+    ds = profile.driving_style or {}
+
+    # Manejo dominante
+    hc = ds.get("handling_counts", {})
+    if hc and any(hc.values()):
+        dominant = max(hc, key=lambda k: hc.get(k, 0))
+        total = sum(hc.values())
+        pct = int(hc.get(dominant, 0) / total * 100)
+        lines.append(f"  Manejo dominante: {dominant} ({pct}% de {total} sesiones)")
+
+    # Tendencia de subviraje
+    uh = ds.get("understeer_history", [])
+    if len(uh) >= 2:
+        avg_us = sum(uh) / len(uh)
+        trend_us = uh[-1] - uh[0]
+        direction = "↑ aumentando" if trend_us > 0.05 else ("↓ mejorando" if trend_us < -0.05 else "→ estable")
+        lines.append(f"  Understeer score promedio: {avg_us:.2f}/1.0 — tendencia {direction} ({len(uh)} sesiones)")
+
+    # Patrón de throttle
+    th = ds.get("throttle_history", [])
+    if len(th) >= 2:
+        avg_thr = sum(th) / len(th)
+        lines.append(f"  Throttle promedio histórico: {avg_thr:.1f}%")
+
+    # Agresividad de frenada
+    bh = ds.get("brake_g_history", [])
+    if len(bh) >= 2:
+        avg_bg = sum(bh) / len(bh)
+        lines.append(f"  G de frenada promedio: {avg_bg:.2f}g")
+
+    # Estabilidad trasera
+    sh = ds.get("slip_rear_history", [])
+    if len(sh) >= 2:
+        avg_slip = sum(sh) / len(sh)
+        label = "alta" if avg_slip > 5.0 else ("moderada" if avg_slip > 2.0 else "baja")
+        lines.append(f"  Tendencia de slip trasero: {avg_slip:.1f}% promedio ({label})")
+
+    # Sesiones y perfil histórico
+    lines.append(f"  Sesiones en este combo: {profile.sessions_count} | Mejor: {_fmt(profile.best_lap)} | Promedio: {_fmt(profile.avg_lap)}")
+    if profile.weak_sector:
+        lines.append(f"  Sector históricamente débil: {profile.weak_sector}")
+
+    # Problemas confirmados
+    confirmed = [
+        (area, data) for area, data in (profile.recurring_issues or {}).items()
+        if data.get("confirmed")
+    ]
+    if confirmed:
+        lines.append("  Problemas confirmados (3+ sesiones):")
+        for area, data in sorted(confirmed, key=lambda x: x[1].get("count", 0), reverse=True)[:3]:
+            lines.append(f"    ✗ {area} — {data['count']} veces")
+
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
 _SESSION_PROMPT = """\
 Eres un ingeniero de pista analizando UNA SESIÓN COMPLETA de sim racing (múltiples vueltas).
 
@@ -380,7 +444,7 @@ MEJOR VUELTA — resumen de anomalías:
 
 MEJOR VUELTA — pre-análisis técnico completo:
 {best_lap_pre}
-
+{pilot_style_block}
 Devuelve exactamente este JSON (sin markdown):
 {{
   "section_8_technical": {{
@@ -416,6 +480,25 @@ Devuelve exactamente este JSON (sin markdown):
     "driving_style": ["característica del estilo de pilotaje 1"],
     "setup_recommendations": ["recomendación específica con números"],
     "next_session_target": "Meta concreta para la próxima sesión"
+  }},
+  "section_12_driving_coaching": {{
+    "style_profile": "1-2 frases describiendo el estilo real del piloto basado en datos históricos y sesión actual. Sé directo y específico.",
+    "recurring_habits": [
+      {{
+        "habit": "nombre corto del hábito",
+        "evidence": "dato concreto que lo respalda (número)",
+        "impact": "high|medium|low",
+        "correction": "instrucción técnica específica para corregirlo"
+      }}
+    ],
+    "technique_observations": [
+      {{
+        "area": "área técnica (ej: frenada T3, aceleración salida lenta)",
+        "observation": "qué hace el piloto con dato concreto",
+        "drill": "ejercicio ejecutable en la próxima sesión"
+      }}
+    ],
+    "immediate_focus": "Una sola cosa concreta en la que enfocarse. Debe ser ejecutable y medible."
   }}
 }}
 """
@@ -427,6 +510,7 @@ def analyze_session(
     setup_data: dict | None = None,
     track_info: dict | None = None,
     prev_setup: dict | None = None,
+    profile: KnowledgeProfile | None = None,
     plan: str = "free",
 ) -> tuple[dict, int, int]:
     """
@@ -493,10 +577,13 @@ def analyze_session(
                 prev_setup_block += f"\n  ... y {len(changes) - 15} cambios más"
             prev_setup_block += "\nAnaliza si estos cambios mejoraron o empeoraron el rendimiento según los datos de la sesión."
 
+    pilot_style_block = _build_pilot_style_block(profile)
+
     prompt = _SESSION_PROMPT.format(
         session_data=json.dumps(compact_summary, ensure_ascii=False, indent=2),
         digest=digest,
         best_lap_pre=json.dumps(compact_pre, ensure_ascii=False, indent=2),
+        pilot_style_block=pilot_style_block,
     ) + track_block + setup_block + prev_setup_block
 
     session_max_tokens = 8000 if _is_gemini(plan) else 5000
@@ -510,6 +597,12 @@ def analyze_session(
             "what_is_working": [], "problems_detected": [],
             "driving_style": [], "setup_recommendations": [],
             "next_session_target": "Parse error — ver logs",
+        },
+        "section_12_driving_coaching": {
+            "style_profile": "",
+            "recurring_habits": [],
+            "technique_observations": [],
+            "immediate_focus": "",
         },
     }
     return _parse_json(raw, fallback), tok_in, tok_out

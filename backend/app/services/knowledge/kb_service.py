@@ -136,6 +136,48 @@ def update_profile(
     if pre_analysis.get("tyre_press"):
         profile.common_setup = {"tyre_press": pre_analysis["tyre_press"]}
 
+    # ── Estilo de conducción (sin tokens) ─────────────────────────────────────
+    ds = dict(profile.driving_style or {})
+
+    # Manejo dominante
+    handling = pre_analysis.get("handling")
+    if handling:
+        hc = ds.get("handling_counts", {"understeer": 0, "oversteer": 0, "neutral": 0})
+        hc[handling] = hc.get(handling, 0) + 1
+        ds["handling_counts"] = hc
+
+    # Historial understeer score (últimas 15 sesiones)
+    us = pre_analysis.get("understeer_score")
+    if us is not None:
+        uh = ds.get("understeer_history", [])
+        uh.append(round(float(us), 3))
+        ds["understeer_history"] = uh[-15:]
+
+    # Historial throttle promedio
+    thr = pre_analysis.get("avg_throttle_pct")
+    if thr is not None:
+        th = ds.get("throttle_history", [])
+        th.append(round(float(thr), 1))
+        ds["throttle_history"] = th[-15:]
+
+    # Historial G frenada máxima
+    bg = pre_analysis.get("g_lon_brake_max")
+    if bg is not None:
+        bh = ds.get("brake_g_history", [])
+        bh.append(round(abs(float(bg)), 3))
+        ds["brake_g_history"] = bh[-15:]
+
+    # Historial slip trasero promedio
+    slip = pre_analysis.get("slip")
+    if isinstance(slip, dict):
+        rear_slip = ((slip.get("avg_rl") or 0) + (slip.get("avg_rr") or 0)) / 2
+        if rear_slip > 0:
+            sh = ds.get("slip_rear_history", [])
+            sh.append(round(rear_slip, 3))
+            ds["slip_rear_history"] = sh[-15:]
+
+    profile.driving_style = ds
+
     db.flush()
     return profile
 

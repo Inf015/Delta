@@ -48,6 +48,10 @@ class KnowledgeProfile(Base):
     # {area: {count, confirmed, last_seen_lap_time}}
     recurring_issues: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Estilo de conducción acumulado (sin tokens)
+    # {handling_counts, understeer_history, throttle_history, brake_g_history, slip_rear_history}
+    driving_style: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc)
