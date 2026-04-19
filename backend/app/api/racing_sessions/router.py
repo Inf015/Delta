@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 _REPORT_CACHE_VERSION = 2
 
 
-def _generate_report(rs: RacingSession, db: Session) -> dict:
+def _generate_report(rs: RacingSession, db: Session, user_plan: str = "free") -> dict:
     """Genera el reporte completo (secciones 0-11) para una RacingSession.
     No guarda en caché — el caller es responsable de persistir rs.report_cache.
     """
@@ -111,6 +111,7 @@ def _generate_report(rs: RacingSession, db: Session) -> dict:
         setup_data=rs.setup_data,
         track_info=track_info_dict,
         prev_setup=prev_setup,
+        plan=user_plan,
     )
     report.update(ai_sections)
 
@@ -474,7 +475,7 @@ def get_session_report(racing_session_id: uuid.UUID, db: Session = Depends(get_d
     if rs.report_cache and rs.report_cache.get("meta", {}).get("_cache_version") == _REPORT_CACHE_VERSION:
         return rs.report_cache
 
-    report = _generate_report(rs, db)
+    report = _generate_report(rs, db, user_plan=current_user.plan.value)
     rs.report_cache = report
     db.commit()
     return report
@@ -492,7 +493,7 @@ def download_session_pdf(racing_session_id: uuid.UUID, db: Session = Depends(get
 
     report = rs.report_cache
     if not report or report.get("meta", {}).get("_cache_version") != _REPORT_CACHE_VERSION:
-        report = _generate_report(rs, db)
+        report = _generate_report(rs, db, user_plan=current_user.plan.value)
         rs.report_cache = report
         db.commit()
 
@@ -710,6 +711,7 @@ def compare_sessions(body: CompareRequest, db: Session = Depends(get_db), curren
         delta_s2=delta_s2,
         delta_s3=delta_s3,
         delta_total=delta_total,
+        plan=current_user.plan.value,
     )
     logging.getLogger(__name__).info(
         "Compare Claude call — %s vs %s — tokens: %d in / %d out",

@@ -30,6 +30,9 @@ google-api-python-client==2.149.0
 # Anthropic
 anthropic==0.34.2
 
+# Google Gemini
+google-genai>=0.8.0
+
 # PDF
 reportlab==4.2.2
 

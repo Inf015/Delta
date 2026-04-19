@@ -54,6 +54,7 @@ def process_session(self, session_id: str) -> dict:
 
     # Cargar relación user antes de cerrar la sesión ORM
     pilot_name = session.user.name if session.user and session.user.name else "Piloto"
+    user_plan  = session.user.plan.value if session.user else "free"
 
     # Buscar Analysis existente (puede ser un retry) o crear uno nuevo
     analysis = db.query(Analysis).filter_by(session_id=sid).first()
@@ -124,9 +125,9 @@ def process_session(self, session_id: str) -> dict:
                 if best_analysis and best_analysis.pre_analysis:
                     best_lap_pre = best_analysis.pre_analysis
 
-        logger.info("Llamando Claude para sesión %s", session_id)
+        logger.info("Llamando LLM (%s) para sesión %s", user_plan, session_id)
         ai_result, tok_in, tok_out = claude_client.analyze(
-            pre_result, profile, prev_recs, best_lap_pre=best_lap_pre
+            pre_result, profile, prev_recs, best_lap_pre=best_lap_pre, plan=user_plan
         )
 
         analysis.ai_result     = ai_result

@@ -613,3 +613,127 @@ def _detect_incidents(
             last_dist = d
 
     return deduped[:10]
+
+
+def build_digest(r: dict) -> str:
+    """
+    Convierte pre_analysis en un resumen legible de anomalías y flags.
+    Reduce tokens de input y da al LLM puntos de anclaje causales concretos.
+    """
+    lines: list[str] = []
+
+    # Tiempo y sectores
+    lap_line = f"Vuelta: {r.get('lap_time_fmt', '—')}"
+    s1, s2, s3 = r.get("s1", 0), r.get("s2", 0), r.get("s3", 0)
+    if s1 and s2 and s3:
+        lap_line += f" | S1={s1:.3f}s | S2={s2:.3f}s | S3={s3:.3f}s"
+    ws = r.get("weak_sector")
+    if ws:
+        lap_line += f" — Sector más lento: {ws}"
+    lines.append(lap_line)
+
+    # Comportamiento general
+    handling = r.get("handling")
+    if handling and handling != "neutral":
+        lines.append(f"⚠ COMPORTAMIENTO: {handling.upper()}")
+
+    # Subviraje
+    steer = r.get("steering", {})
+    ul = steer.get("understeer_level", "low")
+    if ul in ("medium", "high"):
+        lines.append(f"⚠ SUBVIRAJE: nivel {ul} (score={steer.get('understeer_score', 0):.2f})")
+
+    # Temp gomas — desequilibrios >10°C del promedio
+    tt = r.get("tyre_temp", {})
+    if tt:
+        temps = {c: tt[c]["avg"] for c in ("FL", "FR", "RL", "RR") if c in tt and "avg" in tt[c]}
+        if temps:
+            avg_all = sum(temps.values()) / len(temps)
+            for corner, temp in temps.items():
+                diff = temp - avg_all
+                if abs(diff) > 10:
+                    dir_str = "sobre" if diff > 0 else "bajo"
+                    lines.append(f"⚠ TEMP GOMA {corner}: {temp:.0f}°C ({diff:+.0f}°C {dir_str} promedio {avg_all:.0f}°C)")
+
+    # Desgaste diferencial
+    tw = r.get("tyre_wear", {})
+    diag = tw.get("diagnosis", [])
+    if diag:
+        lines.append(f"⚠ DESGASTE DIFERENCIAL: {', '.join(diag)}")
+
+    # Camber por rueda
+    tz = r.get("tyre_zones", {})
+    for corner, data in tz.items():
+        cd = data.get("camber_diag", "ok")
+        if cd != "ok":
+            lines.append(f"⚠ CAMBER {corner}: {cd}")
+
+    # Carcasa sobrecalentada
+    tc = r.get("tyre_carcass", {})
+    oh = tc.get("overheating_risk", [])
+    if oh:
+        lines.append(f"⚠ CARCASA SOBRECALENTADA: {', '.join(oh)}")
+
+    # Temp frenos — desequilibrios >50°C del promedio
+    bt = r.get("brake_temp", {})
+    if bt:
+        temps_b = {c: bt[c]["avg"] for c in ("FL", "FR", "RL", "RR") if c in bt and "avg" in bt[c]}
+        if temps_b:
+            avg_b = sum(temps_b.values()) / len(temps_b)
+            for corner, temp in temps_b.items():
+                diff = temp - avg_b
+                if abs(diff) > 50:
+                    lines.append(f"⚠ TEMP FRENO {corner}: {temp:.0f}°C ({diff:+.0f}°C vs promedio {avg_b:.0f}°C)")
+
+    # Balance frenos
+    bb = r.get("brake_balance", {})
+    if bb.get("bias") not in (None, "balanced"):
+        lines.append(
+            f"⚠ BALANCE FRENOS: {bb['bias']} "
+            f"(delantera {bb.get('front_avg', 0):.0f}°C vs trasera {bb.get('rear_avg', 0):.0f}°C)"
+        )
+
+    # Ride height / rake
+    rh = r.get("ride_height", {})
+    if rh:
+        rake_diag = rh.get("rake_diagnosis")
+        rake_mm = rh.get("rake_mm", 0)
+        if rake_diag and rake_diag != "neutral":
+            lines.append(f"⚠ RAKE: {rake_mm:+.1f}mm → {rake_diag}")
+        front_min = rh.get("front", {}).get("min_mm", 999)
+        if front_min < 20:
+            lines.append(f"⚠ ALTURA MÍNIMA DELANTERA: {front_min:.1f}mm → riesgo de contacto con suelo")
+
+    # Amortiguadores
+    sv = r.get("susp_velocity", {})
+    dd = sv.get("damper_diagnosis")
+    if dd and dd != "well_damped":
+        corners_p95 = [v.get("p95_ms", 0) for v in sv.values() if isinstance(v, dict) and "p95_ms" in v]
+        avg_p95 = sum(corners_p95) / len(corners_p95) if corners_p95 else 0
+        lines.append(f"⚠ AMORTIGUADORES: {dd} (p95 promedio={avg_p95:.3f} m/s)")
+
+    # Distribución de cargas
+    tl = r.get("tyre_loads", {})
+    if tl.get("balance_diag") not in (None, "balanced"):
+        lines.append(
+            f"⚠ CARGAS: {tl['balance_diag']} "
+            f"({tl.get('front_pct', 0):.1f}% del. / {tl.get('rear_pct', 0):.1f}% tras.)"
+        )
+
+    # LSD
+    lsd = r.get("lsd_analysis", {})
+    if lsd.get("lsd_diagnosis") == "open_diff":
+        lines.append(
+            f"⚠ DIFERENCIAL: open_diff "
+            f"(accel_diff_avg={lsd.get('accel_diff_avg', 0):.1f} km/h) → pérdida de tracción"
+        )
+
+    # Incidentes
+    incidents = r.get("incidents", [])
+    if incidents:
+        lines.append(f"⚠ INCIDENTES: {len(incidents)} detectados")
+        for inc in incidents[:3]:
+            dist = f" m{inc.get('dist_m', 0):.0f}" if inc.get("dist_m") else ""
+            lines.append(f"  • [{inc.get('severity', '?').upper()}]{dist} {inc.get('detail', '')}")
+
+    return "\n".join(lines) if lines else "Sin anomalías destacables."

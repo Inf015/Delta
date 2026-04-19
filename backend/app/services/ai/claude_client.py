@@ -1,9 +1,10 @@
 """
-Cliente Claude para análisis de telemetría.
+Cliente LLM para análisis de telemetría.
 
-Usa claude-haiku-4-5 para mantener el costo bajo.
-Recibe pre_analysis + KnowledgeProfile y devuelve
-un dict estructurado con hallazgos y recomendaciones.
+Routing por plan:
+  free  → Claude Haiku 4.5        (Anthropic)
+  pro   → Gemini 2.5 Flash        (Google)
+  team  → Gemini 2.5 Pro          (Google)
 """
 
 from __future__ import annotations
@@ -12,18 +13,106 @@ import json
 import logging
 
 import anthropic
+from google import genai as google_genai
+from google.genai import types as google_types
 from json_repair import repair_json
 
 from app.core.config import settings
 from app.models.knowledge import KnowledgeProfile
+from app.services.analysis.pre_analysis import build_digest
 from app.utils.formatters import fmt_lap_time as _fmt
 
+logger = logging.getLogger(__name__)
 
-def _client() -> anthropic.Anthropic:
-    """Devuelve el cliente Anthropic con timeout global de 90s."""
+# ── Modelos por plan ──────────────────────────────────────────────────────────
+_MODEL_FREE  = "claude-haiku-4-5-20251001"
+_MODEL_PRO   = "gemini-2.5-flash"
+_MODEL_TEAM  = "gemini-2.5-pro"
+
+_GEMINI_PLANS = {"pro", "team"}
+
+
+def _model_for_plan(plan: str) -> str:
+    if plan == "team":
+        return _MODEL_TEAM
+    if plan == "pro":
+        return _MODEL_PRO
+    return _MODEL_FREE
+
+
+def _is_gemini(plan: str) -> bool:
+    return plan in _GEMINI_PLANS
+
+
+def _max_tokens_for_plan(plan: str) -> int:
+    return 2500 if plan in _GEMINI_PLANS else 1500
+
+
+# ── Clientes ──────────────────────────────────────────────────────────────────
+def _anthropic_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
 
 
+def _gemini_client() -> google_genai.Client:
+    return google_genai.Client(api_key=settings.google_gemini_api_key)
+
+
+# ── Llamada unificada ─────────────────────────────────────────────────────────
+def _strip_md(raw: str) -> str:
+    if "```" in raw:
+        lines = raw.split("\n")
+        return "\n".join(l for l in lines if not l.strip().startswith("```")).strip()
+    return raw
+
+
+def _call_llm(plan: str, system: str, prompt: str, max_tokens: int) -> tuple[str, int, int]:
+    """Llama al LLM correcto según el plan y retorna (texto, tok_in, tok_out)."""
+    model = _model_for_plan(plan)
+
+    if _is_gemini(plan):
+        client = _gemini_client()
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=google_types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=max_tokens,
+                temperature=0.3,
+            ),
+        )
+        text = (response.text or "").strip()
+        usage = response.usage_metadata
+        tok_in  = getattr(usage, "prompt_token_count", 0) or 0
+        tok_out = getattr(usage, "candidates_token_count", 0) or 0
+        if tok_out >= max_tokens * 0.95:
+            logger.warning("Gemini %s posiblemente truncado (%d out tokens)", model, tok_out)
+        return text, tok_in, tok_out
+
+    # Anthropic (FREE)
+    client = _anthropic_client()
+    msg = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if not msg.content or not hasattr(msg.content[0], "text"):
+        raise RuntimeError("Anthropic devolvió respuesta vacía")
+    if msg.stop_reason == "max_tokens":
+        logger.warning("Anthropic %s alcanzó max_tokens (%d out)", model, msg.usage.output_tokens)
+    return msg.content[0].text.strip(), msg.usage.input_tokens, msg.usage.output_tokens
+
+
+def _parse_json(raw: str, fallback: dict) -> dict:
+    raw = _strip_md(raw)
+    try:
+        return json.loads(repair_json(raw))
+    except Exception as e:
+        logger.error("JSON irreparable: %s\nRaw: %.400s", e, raw)
+        return fallback
+
+
+# ── Prompts ───────────────────────────────────────────────────────────────────
 _SYSTEM = """\
 Eres un ingeniero de pista experto en sim racing. Analizas datos de telemetría \
 y das feedback técnico directo, específico y accionable al piloto.
@@ -47,7 +136,10 @@ intermedios imposibles de seleccionar en el juego.
 """
 
 _PROMPT_TEMPLATE = """\
-VUELTA ACTUAL:
+RESUMEN EJECUTIVO — anomalías y flags detectados automáticamente:
+{digest}
+
+VUELTA ACTUAL (datos completos):
 {pre_analysis}
 
 {best_lap_block}HISTORIAL DEL PILOTO (pista+auto):
@@ -109,7 +201,6 @@ def _build_profile_summary(profile: KnowledgeProfile | None, prev_recs: list | N
         f"Mejor vuelta histórica: {_fmt(profile.best_lap)}",
         f"Promedio histórico: {_fmt(profile.avg_lap)}",
     ]
-    # Sector débil con desglose de frecuencia
     cp = profile.corner_profiles or {}
     sector_counts: dict = cp.get("sector_counts", {})
     total_sc = sum(sector_counts.values())
@@ -131,7 +222,6 @@ def _build_profile_summary(profile: KnowledgeProfile | None, prev_recs: list | N
         if latest.get("handling"):
             lines.append(f"Comportamiento habitual: {latest['handling']}")
 
-    # Problemas confirmados (≥3 sesiones — top 3 por frecuencia)
     recurring = profile.recurring_issues or {}
     confirmed = sorted(
         [(area, data) for area, data in recurring.items() if data.get("confirmed")],
@@ -152,7 +242,6 @@ def _build_profile_summary(profile: KnowledgeProfile | None, prev_recs: list | N
         for area, data in unconfirmed:
             lines.append(f"  ? {area} — visto {data['count']} veces")
 
-    # Solo recomendaciones testeadas con resultado significativo
     if prev_recs:
         useful = [r for r in prev_recs if r.tested and r.delta_improvement is not None and abs(r.delta_improvement) > 0.05]
         if useful:
@@ -165,38 +254,30 @@ def _build_profile_summary(profile: KnowledgeProfile | None, prev_recs: list | N
     return "\n".join(lines)
 
 
+# ── API pública ───────────────────────────────────────────────────────────────
+
 def analyze(
     pre_analysis: dict,
     profile: KnowledgeProfile | None,
     prev_recs: list | None = None,
     best_lap_pre: dict | None = None,
+    plan: str = "free",
 ) -> tuple[dict, int, int]:
     """
-    Llama Claude Haiku con el pre-análisis y el perfil del piloto.
-    prev_recs: últimas recomendaciones (ya testeadas) para cerrar el ciclo.
-    best_lap_pre: pre_analysis de la mejor vuelta histórica para comparación directa.
-
+    Análisis por vuelta. plan determina el modelo usado.
     Retorna (ai_result_dict, tokens_input, tokens_output).
     """
-    client = _client()
-
     _EXCLUDE = {"track", "car", "simulator"}
-    _ALWAYS_INCLUDE = {
-        "tyre_wear", "tyre_carcass", "ride_height", "tyre_loads",
-        "susp_velocity", "lsd_analysis", "steering", "yaw_rate",
-        "braking_zones", "handling",
-    }
-    compact = {k: v for k, v in pre_analysis.items()
-               if k not in _EXCLUDE or k in _ALWAYS_INCLUDE}
+    compact = {k: v for k, v in pre_analysis.items() if k not in _EXCLUDE}
 
-    # Bloque de comparación vs mejor vuelta
+    digest = build_digest(pre_analysis)
+
     best_lap_block = ""
     if best_lap_pre and best_lap_pre != pre_analysis:
-        compact_best = {k: v for k, v in best_lap_pre.items()
-                        if k not in ("track", "car", "simulator")}
-        delta_s1 = pre_analysis.get("s1", 0) - best_lap_pre.get("s1", 0)
-        delta_s2 = pre_analysis.get("s2", 0) - best_lap_pre.get("s2", 0)
-        delta_s3 = pre_analysis.get("s3", 0) - best_lap_pre.get("s3", 0)
+        compact_best = {k: v for k, v in best_lap_pre.items() if k not in _EXCLUDE}
+        delta_s1    = pre_analysis.get("s1", 0) - best_lap_pre.get("s1", 0)
+        delta_s2    = pre_analysis.get("s2", 0) - best_lap_pre.get("s2", 0)
+        delta_s3    = pre_analysis.get("s3", 0) - best_lap_pre.get("s3", 0)
         delta_total = pre_analysis.get("lap_time", 0) - best_lap_pre.get("lap_time", 0)
         best_lap_block = (
             f"MEJOR VUELTA PERSONAL (comparación directa):\n"
@@ -205,55 +286,31 @@ def analyze(
         )
 
     prompt = _PROMPT_TEMPLATE.format(
+        digest=digest,
         pre_analysis=json.dumps(compact, ensure_ascii=False, indent=2),
         best_lap_block=best_lap_block,
         profile_summary=_build_profile_summary(profile, prev_recs),
     )
 
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1500,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    max_tokens = _max_tokens_for_plan(plan)
+    raw, tok_in, tok_out = _call_llm(plan, _SYSTEM, prompt, max_tokens)
 
-    if not message.content or not hasattr(message.content[0], "text"):
-        raise RuntimeError("Claude devolvió respuesta vacía o sin texto")
-    raw = message.content[0].text.strip()
-
-    # Quitar code fences si Claude los añadió (```json ... ```)
-    if "```" in raw:
-        lines = raw.split("\n")
-        raw = "\n".join(
-            line for line in lines
-            if not line.strip().startswith("```")
-        ).strip()
-
-    # json_repair tolera trailing commas, newlines en strings, etc.
-    try:
-        result = json.loads(repair_json(raw))
-    except Exception as e:
-        logging.getLogger(__name__).error("Claude JSON irreparable: %s\nRaw: %.400s", e, raw)
-        result = {
-            "summary": raw[:300],
-            "lap_context": {"classification": "average", "interpretation": "Parse error"},
-            "sector_analysis": {
-                "s1": {"assessment": "ok", "detail": "Parse error"},
-                "s2": {"assessment": "ok", "detail": "Parse error"},
-                "s3": {"assessment": "ok", "detail": "Parse error"},
-            },
-            "scores": {"frenadas": 0, "traccion": 0, "curvas_rapidas": 0, "gestion_gomas": 0, "consistencia": 0},
-            "strengths": [],
-            "issues": [],
-            "recommendations": [],
-            "setup_suggestions": [],
-            "improvement_plan": [],
-        }
-
-    tokens_in  = message.usage.input_tokens
-    tokens_out = message.usage.output_tokens
-
-    return result, tokens_in, tokens_out
+    fallback = {
+        "summary": raw[:300],
+        "lap_context": {"classification": "average", "interpretation": "Parse error"},
+        "sector_analysis": {
+            "s1": {"assessment": "ok", "detail": "Parse error"},
+            "s2": {"assessment": "ok", "detail": "Parse error"},
+            "s3": {"assessment": "ok", "detail": "Parse error"},
+        },
+        "scores": {"frenadas": 0, "traccion": 0, "curvas_rapidas": 0, "gestion_gomas": 0, "consistencia": 0},
+        "strengths": [],
+        "issues": [],
+        "recommendations": [],
+        "setup_suggestions": [],
+        "improvement_plan": [],
+    }
+    return _parse_json(raw, fallback), tok_in, tok_out
 
 
 _TRACK_INFO_PROMPT = """\
@@ -286,52 +343,29 @@ Devuelve SOLO este JSON (sin markdown):
 
 
 def get_track_info_from_claude(track_id: str, track_length_m: float | None = None) -> dict:
-    """
-    Obtiene información de un circuito usando Claude Haiku como fallback.
-    Usado para circuitos ficticios o mods no presentes en la base de datos estática.
-    """
-    client = _client()
-
-    length_hint = f"La longitud del circuito según la telemetría es aproximadamente {track_length_m:.0f}m." \
+    """Obtiene info de un circuito usando Haiku (siempre, independiente del plan)."""
+    length_hint = (
+        f"La longitud del circuito según la telemetría es aproximadamente {track_length_m:.0f}m."
         if track_length_m and track_length_m > 0 else ""
-
+    )
     prompt = _TRACK_INFO_PROMPT.format(track_id=track_id, length_hint=length_hint)
 
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=500,
-        system="Eres un experto en circuitos de automovilismo y sim racing. Responde siempre con JSON válido.",
-        messages=[{"role": "user", "content": prompt}],
+    raw, tok_in, tok_out = _call_llm(
+        "free",
+        "Eres un experto en circuitos de automovilismo y sim racing. Responde siempre con JSON válido.",
+        prompt,
+        500,
     )
 
-    if not message.content or not hasattr(message.content[0], "text"):
-        raise RuntimeError("Claude devolvió respuesta vacía en get_track_info")
-    raw = message.content[0].text.strip()
-    if "```" in raw:
-        lines = raw.split("\n")
-        raw = "\n".join(l for l in lines if not l.strip().startswith("```")).strip()
-
-    try:
-        result = json.loads(repair_json(raw))
-    except Exception as e:
-        logging.getLogger(__name__).error("Claude track info JSON error: %s", e)
-        result = {
-            "display_name": track_id.replace("_", " ").title(),
-            "country": None,
-            "track_type": "fictional",
-            "length_m": track_length_m,
-            "turns": None,
-            "characteristics": [],
-            "sectors": [],
-            "key_corners": [],
-            "lap_record": None,
-            "notes": None,
-        }
-
-    logging.getLogger(__name__).info(
-        "Track info Claude call — track: %s — tokens: %d in / %d out",
-        track_id, message.usage.input_tokens, message.usage.output_tokens,
-    )
+    fallback = {
+        "display_name": track_id.replace("_", " ").title(),
+        "country": None, "track_type": "fictional",
+        "length_m": track_length_m, "turns": None,
+        "characteristics": [], "sectors": [], "key_corners": [],
+        "lap_record": None, "notes": None,
+    }
+    result = _parse_json(raw, fallback)
+    logger.info("Track info call — track: %s — tokens: %d in / %d out", track_id, tok_in, tok_out)
     return result
 
 
@@ -341,7 +375,10 @@ Eres un ingeniero de pista analizando UNA SESIÓN COMPLETA de sim racing (múlti
 DATOS DE LA SESIÓN:
 {session_data}
 
-MEJOR VUELTA — pre-análisis técnico:
+MEJOR VUELTA — resumen de anomalías:
+{digest}
+
+MEJOR VUELTA — pre-análisis técnico completo:
 {best_lap_pre}
 
 Devuelve exactamente este JSON (sin markdown):
@@ -390,30 +427,22 @@ def analyze_session(
     setup_data: dict | None = None,
     track_info: dict | None = None,
     prev_setup: dict | None = None,
+    plan: str = "free",
 ) -> tuple[dict, int, int]:
     """
-    Llama Claude Haiku con el resumen de sesión completa y el pre-análisis de la mejor vuelta.
-    Genera las secciones 8-11 del reporte.
-
+    Análisis de sesión completa (secciones 8-11).
     Retorna (ai_result_dict, tokens_input, tokens_output).
     """
-    client = _client()
-
-    # Compactar para no desperdiciar tokens
     compact_summary = {
         k: v for k, v in session_summary.items()
         if k not in ("theoretical_best_fmt", "best_s1_fmt", "best_s2_fmt", "best_s3_fmt",
                      "avg_lap_fmt", "worst_lap_fmt", "best_lap_fmt")
     }
-    _SESSION_ALWAYS_INCLUDE = {
-        "tyre_wear", "tyre_carcass", "ride_height", "tyre_loads",
-        "susp_velocity", "lsd_analysis", "steering", "yaw_rate",
-        "braking_zones", "handling",
-    }
-    compact_pre = {k: v for k, v in best_lap_pre.items()
-                   if k not in ("track", "car", "simulator") or k in _SESSION_ALWAYS_INCLUDE}
+    _SKIP = {"track", "car", "simulator"}
+    compact_pre = {k: v for k, v in best_lap_pre.items() if k not in _SKIP}
 
-    # Bloque de contexto del circuito
+    digest = build_digest(best_lap_pre)
+
     track_block = ""
     if track_info and track_info.get("display_name"):
         parts = [f"\nINFORMACIÓN DEL CIRCUITO: {track_info['display_name']}"]
@@ -437,16 +466,13 @@ def analyze_session(
 
     setup_block = ""
     if setup_data:
-        # Filtrar secciones relevantes — ignorar datos internos del simulador
         _SETUP_SKIP = {"version", "__metadata__", "HEADER", "CAR"}
         compact_setup = {k: v for k, v in setup_data.items() if k.upper() not in _SETUP_SKIP}
         setup_block = f"\n\nSETUP DEL PILOTO:\n{json.dumps(compact_setup, ensure_ascii=False, separators=(',', ':'))}"
 
-    # Comparación de setup respecto a sesión anterior
     prev_setup_block = ""
     if prev_setup and setup_data:
         _SETUP_SKIP = {"version", "__metadata__", "HEADER", "CAR"}
-        # Priorizar secciones relevantes al rendimiento
         _PRIORITY = {"TYRES": 0, "BRAKES": 1, "SUSPENSION": 2, "AERO": 3, "AERODYNAMICS": 3}
         changes: list[tuple[int, str]] = []
         for section, values in setup_data.items():
@@ -460,7 +486,6 @@ def analyze_session(
                     if prev_val is not None and prev_val != val:
                         changes.append((priority, f"  {section}.{key}: {prev_val} → {val}"))
         if changes:
-            # Ordenar por prioridad y limitar a 15 cambios más relevantes
             changes.sort(key=lambda x: x[0])
             top_changes = [c for _, c in changes[:15]]
             prev_setup_block = "\n\nCAMBIOS DE SETUP RESPECTO A SESIÓN ANTERIOR (misma pista/auto):\n" + "\n".join(top_changes)
@@ -470,53 +495,35 @@ def analyze_session(
 
     prompt = _SESSION_PROMPT.format(
         session_data=json.dumps(compact_summary, ensure_ascii=False, indent=2),
+        digest=digest,
         best_lap_pre=json.dumps(compact_pre, ensure_ascii=False, indent=2),
     ) + track_block + setup_block + prev_setup_block
 
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=5000,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    session_max_tokens = 8000 if _is_gemini(plan) else 5000
+    raw, tok_in, tok_out = _call_llm(plan, _SYSTEM, prompt, session_max_tokens)
 
-    if not message.content or not hasattr(message.content[0], "text"):
-        raise RuntimeError("Claude devolvió respuesta vacía en analyze_session")
-
-    if message.stop_reason == "max_tokens":
-        logging.getLogger(__name__).warning(
-            "analyze_session alcanzó max_tokens (%d out) — respuesta posiblemente truncada",
-            message.usage.output_tokens,
-        )
-
-    raw = message.content[0].text.strip()
-    if "```" in raw:
-        lines = raw.split("\n")
-        raw = "\n".join(l for l in lines if not l.strip().startswith("```")).strip()
-
-    try:
-        result = json.loads(repair_json(raw))
-    except Exception as e:
-        logging.getLogger(__name__).error("Claude session JSON irreparable: %s\nRaw: %.400s", e, raw)
-        result = {
-            "section_8_technical": {"strengths": [], "improvements": [], "setup_recommendations": []},
-            "section_9_opportunities": [],
-            "section_10_action_plan": {"focuses": [], "target_lap_time": 0, "timeline": "—"},
-            "section_11_engineer_diagnosis": {"what_is_working": [], "problems_detected": [],
-                                               "driving_style": [], "setup_recommendations": [],
-                                               "next_session_target": "Parse error — ver logs"},
-        }
-
-    return result, message.usage.input_tokens, message.usage.output_tokens
+    fallback = {
+        "section_8_technical": {"strengths": [], "improvements": [], "setup_recommendations": []},
+        "section_9_opportunities": [],
+        "section_10_action_plan": {"focuses": [], "target_lap_time": 0, "timeline": "—"},
+        "section_11_engineer_diagnosis": {
+            "what_is_working": [], "problems_detected": [],
+            "driving_style": [], "setup_recommendations": [],
+            "next_session_target": "Parse error — ver logs",
+        },
+    }
+    return _parse_json(raw, fallback), tok_in, tok_out
 
 
 _COMPARE_PROMPT = """\
 Compara dos pilotos en la misma pista. Ambos datos son pre-análisis de su mejor vuelta.
 
 SESIÓN A — {car_a} ({sim_a}):
+{digest_a}
 {pre_a}
 
 SESIÓN B — {car_b} ({sim_b}):
+{digest_b}
 {pre_b}
 
 DELTAS PRE-CALCULADOS (B - A, negativo = A es más rápido):
@@ -547,23 +554,23 @@ def compare(
     delta_s2: float,
     delta_s3: float,
     delta_total: float,
+    plan: str = "free",
 ) -> tuple[dict, int, int]:
     """
-    Llama Claude para comparar dos sesiones.
-
-    Retorna (ai_comparison_dict, tokens_input, tokens_output).
+    Compara dos sesiones. Retorna (ai_comparison_dict, tokens_input, tokens_output).
     """
-    client = _client()
-
-    compact_a = {k: v for k, v in pre_a.items() if k not in ("track", "car", "simulator")}
-    compact_b = {k: v for k, v in pre_b.items() if k not in ("track", "car", "simulator")}
+    _SKIP = {"track", "car", "simulator"}
+    compact_a = {k: v for k, v in pre_a.items() if k not in _SKIP}
+    compact_b = {k: v for k, v in pre_b.items() if k not in _SKIP}
 
     prompt = _COMPARE_PROMPT.format(
         car_a=meta_a.get("car", "A"),
         sim_a=meta_a.get("simulator", ""),
+        digest_a=build_digest(pre_a),
         pre_a=json.dumps(compact_a, ensure_ascii=False, indent=2),
         car_b=meta_b.get("car", "B"),
         sim_b=meta_b.get("simulator", ""),
+        digest_b=build_digest(pre_b),
         pre_b=json.dumps(compact_b, ensure_ascii=False, indent=2),
         delta_total=delta_total,
         delta_s1=delta_s1,
@@ -571,38 +578,12 @@ def compare(
         delta_s3=delta_s3,
     )
 
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    raw, tok_in, tok_out = _call_llm(plan, _SYSTEM, prompt, 1024)
 
-    if not message.content or not hasattr(message.content[0], "text"):
-        raise RuntimeError("Claude devolvió respuesta vacía en compare")
-    raw = message.content[0].text.strip()
-
-    if "```" in raw:
-        lines = raw.split("\n")
-        raw = "\n".join(
-            line for line in lines
-            if not line.strip().startswith("```")
-        ).strip()
-
-    try:
-        result = json.loads(repair_json(raw))
-    except Exception as e:
-        logging.getLogger(__name__).error("Claude compare JSON irreparable: %s\nRaw: %.400s", e, raw)
-        result = {
-            "summary": raw[:300],
-            "advantage_a": [],
-            "advantage_b": [],
-            "key_differences": [],
-            "recommendations": [],
-            "verdict": "Parse error — ver logs",
-        }
-
-    tokens_in  = message.usage.input_tokens
-    tokens_out = message.usage.output_tokens
-
-    return result, tokens_in, tokens_out
+    fallback = {
+        "summary": raw[:300],
+        "advantage_a": [], "advantage_b": [],
+        "key_differences": [], "recommendations": [],
+        "verdict": "Parse error — ver logs",
+    }
+    return _parse_json(raw, fallback), tok_in, tok_out

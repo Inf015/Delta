@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
 
+    # Google Gemini
+    google_gemini_api_key: str = ""
+
     # Stripe
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""

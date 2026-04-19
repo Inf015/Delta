@@ -1,7 +1,7 @@
-// Server-side: URL interna de Docker. Client-side: origen del browser (funciona con cualquier URL).
+// Server-side: URL interna de Docker. Client-side: URL relativa (pasa por el proxy de Next.js).
 const API = typeof window === 'undefined'
-  ? (process.env.API_URL || 'http://localhost:8000')
-  : window.location.origin
+  ? (process.env.API_URL || 'http://api:8000')
+  : ''
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
