@@ -68,15 +68,52 @@ function NoData({ msg }: { msg: string }) {
   )
 }
 
-function BulletList({ items, color = 'text-gray-300' }: { items: string[]; color?: string }) {
+function BulletList({ items, color = 'text-gray-300' }: { items: unknown[]; color?: string }) {
   return (
     <ul className="space-y-1.5">
-      {items.map((item, i) => (
-        <li key={i} className={`text-sm ${color} flex gap-2`}>
-          <span className="text-f1red mt-0.5 shrink-0">•</span>
-          <span>{item}</span>
-        </li>
-      ))}
+      {items.map((item, i) => {
+        const text = typeof item === 'string' ? item : JSON.stringify(item)
+        return (
+          <li key={i} className={`text-sm ${color} flex gap-2`}>
+            <span className="text-f1red mt-0.5 shrink-0">•</span>
+            <span>{text}</span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+type SetupRec = string | { item: string; actual?: string; sugerido?: string }
+
+function SetupRecList({ items }: { items: SetupRec[] }) {
+  return (
+    <ul className="space-y-2">
+      {items.map((item, i) => {
+        if (typeof item === 'string') {
+          return (
+            <li key={i} className="text-sm text-yellow-400 flex gap-2">
+              <span className="text-f1red mt-0.5 shrink-0">•</span>
+              <span>{item}</span>
+            </li>
+          )
+        }
+        return (
+          <li key={i} className="text-sm flex gap-2 border border-gray-800 px-3 py-2">
+            <span className="text-f1red mt-0.5 shrink-0">•</span>
+            <span>
+              <span className="text-white font-medium">{item.item}</span>
+              {item.actual && item.sugerido && (
+                <span className="text-gray-400 ml-2">
+                  <span className="text-gray-500">{item.actual}</span>
+                  <span className="text-gray-600 mx-1">→</span>
+                  <span className="text-yellow-400 font-mono">{item.sugerido}</span>
+                </span>
+              )}
+            </span>
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -474,7 +511,7 @@ function Section8({ s }: { s: NonNullable<SessionReport['section_8_technical']> 
       {(s.setup_recommendations ?? []).length > 0 && (
         <div>
           <p className="text-white font-bold text-sm mb-2">Recomendaciones de setup:</p>
-          <BulletList items={s.setup_recommendations ?? []} color="text-yellow-400" />
+          <SetupRecList items={s.setup_recommendations ?? []} />
         </div>
       )}
     </div>
@@ -553,15 +590,68 @@ function Section11({ s }: { s: NonNullable<SessionReport['section_11_engineer_di
       {(s.setup_recommendations ?? []).length > 0 && (
         <div>
           <p className="text-white font-bold text-sm mb-2">■ RECOMENDACIONES DE SETUP PARA PRÓXIMA SESIÓN</p>
-          {(s.setup_recommendations ?? []).map((r, i) => (
-            <p key={i} className="text-sm text-gray-300 mb-2">{i + 1}. {r}</p>
-          ))}
+          <SetupRecList items={s.setup_recommendations ?? []} />
         </div>
       )}
       {s.next_session_target && (
         <div className="border border-gray-700 p-4">
           <p className="text-white font-bold text-sm mb-2">■ META PARA LA PRÓXIMA SESIÓN</p>
           <p className="text-gray-300 text-sm">{s.next_session_target}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Section12({ s }: { s: NonNullable<SessionReport['section_12_driving_coaching']> }) {
+  const impactColor = (impact: string) =>
+    impact === 'high' ? 'text-red-400' : impact === 'medium' ? 'text-yellow-400' : 'text-gray-400'
+
+  return (
+    <div className="space-y-6">
+      {s.style_profile && (
+        <div className="border-l-2 border-f1red pl-4">
+          <p className="text-gray-300 text-sm">{s.style_profile}</p>
+        </div>
+      )}
+
+      {(s.recurring_habits ?? []).length > 0 && (
+        <div>
+          <p className="text-white font-bold text-sm mb-3">■ HÁBITOS DETECTADOS</p>
+          <div className="space-y-3">
+            {s.recurring_habits.map((h, i) => (
+              <div key={i} className="border border-gray-800 p-3">
+                <div className="flex items-baseline gap-2 mb-1">
+                  <span className={`text-xs font-bold uppercase ${impactColor(h.impact)}`}>[{h.impact}]</span>
+                  <span className="text-white text-sm font-medium">{h.habit}</span>
+                </div>
+                <p className="text-gray-500 text-xs mb-1">Evidencia: {h.evidence}</p>
+                <p className="text-green-400 text-xs">→ {h.correction}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(s.technique_observations ?? []).length > 0 && (
+        <div>
+          <p className="text-white font-bold text-sm mb-3">■ OBSERVACIONES TÉCNICAS</p>
+          <div className="space-y-3">
+            {s.technique_observations.map((t, i) => (
+              <div key={i} className="border-l border-gray-700 pl-3">
+                <p className="text-f1red text-xs font-bold uppercase mb-0.5">{t.area}</p>
+                <p className="text-gray-300 text-sm mb-1">{t.observation}</p>
+                <p className="text-blue-400 text-xs">Drill: {t.drill}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {s.immediate_focus && (
+        <div className="border border-f1red/40 p-4">
+          <p className="text-f1red text-xs font-bold uppercase mb-2">■ ENFOQUE INMEDIATO — PRÓXIMA SESIÓN</p>
+          <p className="text-white text-sm font-medium">{s.immediate_focus}</p>
         </div>
       )}
     </div>
@@ -831,6 +921,13 @@ export default function SessionReportPage() {
         <>
           <SectionHeader num={11} title="Diagnóstico del Ingeniero de Pista" />
           <Section11 s={report.section_11_engineer_diagnosis} />
+        </>
+      )}
+
+      {report.section_12_driving_coaching && (
+        <>
+          <SectionHeader num={12} title="Coaching de Conducción" />
+          <Section12 s={report.section_12_driving_coaching} />
         </>
       )}
 

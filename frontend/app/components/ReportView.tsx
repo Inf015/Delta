@@ -64,13 +64,35 @@ function NoData({ msg }: { msg: string }) {
   return <p className="text-gray-600 text-sm italic border border-gray-800 px-4 py-3">{msg}</p>
 }
 
-function BulletList({ items, color = 'text-gray-300' }: { items: string[]; color?: string }) {
+function BulletList({ items, color = 'text-gray-300' }: { items: unknown[]; color?: string }) {
   return (
     <ul className="space-y-1.5">
       {items.map((item, i) => (
         <li key={i} className={`text-sm ${color} flex gap-2`}>
           <span className="text-f1red mt-0.5 shrink-0">•</span>
-          <span>{item}</span>
+          <span>{typeof item === 'string' ? item : JSON.stringify(item)}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function SetupRecList({ items }: { items: Array<string | { item: string; actual?: string; sugerido?: string }> }) {
+  return (
+    <ul className="space-y-1.5">
+      {items.map((rec, i) => (
+        <li key={i} className="text-sm text-yellow-400 flex gap-2">
+          <span className="text-f1red mt-0.5 shrink-0">•</span>
+          {typeof rec === 'string' ? (
+            <span>{rec}</span>
+          ) : (
+            <span>
+              <span className="text-white font-medium">{rec.item}</span>
+              {rec.actual && rec.sugerido && (
+                <span className="text-gray-400 ml-2">{rec.actual} → <span className="text-green-400">{rec.sugerido}</span></span>
+              )}
+            </span>
+          )}
         </li>
       ))}
     </ul>
@@ -706,7 +728,7 @@ function Section8({ s }: { s: NonNullable<SessionReport['section_8_technical']> 
     <div className="space-y-5">
       {(s.strengths ?? []).length > 0 && <div><p className="text-white font-bold text-sm mb-2">Fortalezas identificadas:</p><BulletList items={s.strengths ?? []} /></div>}
       {(s.improvements ?? []).length > 0 && <div><p className="text-white font-bold text-sm mb-2">Áreas de mejora:</p><BulletList items={s.improvements ?? []} /></div>}
-      {(s.setup_recommendations ?? []).length > 0 && <div><p className="text-white font-bold text-sm mb-2">Recomendaciones de setup:</p><BulletList items={s.setup_recommendations ?? []} color="text-yellow-400" /></div>}
+      {(s.setup_recommendations ?? []).length > 0 && <div><p className="text-white font-bold text-sm mb-2">Recomendaciones de setup:</p><SetupRecList items={s.setup_recommendations ?? []} /></div>}
     </div>
   )
 }
@@ -758,7 +780,7 @@ function Section11({ s }: { s: NonNullable<SessionReport['section_11_engineer_di
       {(s.setup_recommendations ?? []).length > 0 && (
         <div>
           <p className="text-white font-bold text-sm mb-2">■ RECOMENDACIONES DE SETUP</p>
-          {(s.setup_recommendations ?? []).map((r, i) => <p key={i} className="text-sm text-gray-300 mb-2">{i + 1}. {r}</p>)}
+          <SetupRecList items={s.setup_recommendations ?? []} />
         </div>
       )}
       {s.next_session_target && (

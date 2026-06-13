@@ -75,7 +75,6 @@ app = FastAPI(
     title="SimTelemetry Pro",
     description="Plataforma de análisis de telemetría para sim racing",
     version="0.1.0",
-    # No exponer docs en producción
     docs_url="/docs" if settings.environment != "production" else None,
     redoc_url="/redoc" if settings.environment != "production" else None,
 )

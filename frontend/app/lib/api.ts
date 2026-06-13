@@ -277,7 +277,7 @@ export interface SessionReport {
   section_8_technical?: {
     strengths: string[]
     improvements: string[]
-    setup_recommendations: string[]
+    setup_recommendations: Array<string | { item: string; actual?: string; sugerido?: string }>
   }
   section_9_opportunities?: Array<{
     rank: number
@@ -297,8 +297,23 @@ export interface SessionReport {
     what_is_working: string[]
     problems_detected: string[]
     driving_style: string[]
-    setup_recommendations: string[]
+    setup_recommendations: Array<string | { item: string; actual?: string; sugerido?: string }>
     next_session_target: string
+  }
+  section_12_driving_coaching?: {
+    style_profile: string
+    recurring_habits: Array<{
+      habit: string
+      evidence: string
+      impact: 'high' | 'medium' | 'low'
+      correction: string
+    }>
+    technique_observations: Array<{
+      area: string
+      observation: string
+      drill: string
+    }>
+    immediate_focus: string
   }
 }
 

@@ -606,7 +606,12 @@ def analyze_session(
             "immediate_focus": "",
         },
     }
-    return _parse_json(raw, fallback), tok_in, tok_out
+    result = _parse_json(raw, fallback)
+    # Merge fallback for missing top-level keys (handles partial/truncated LLM responses)
+    for key, default in fallback.items():
+        if key not in result:
+            result[key] = default
+    return result, tok_in, tok_out
 
 
 _COMPARE_PROMPT = """\

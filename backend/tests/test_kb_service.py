@@ -29,6 +29,7 @@ def _profile(recurring: dict | None = None, sessions_count: int = 0,
         recurring_issues=recurring,
         corner_profiles=None,
         common_setup=None,
+        driving_style=None,
     )
 
 
