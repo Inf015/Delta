@@ -1,99 +1,99 @@
 # Delta
 
-Plataforma de análisis de telemetría para sim racing. Convierte los datos crudos de una
-sesión en respuestas concretas: **dónde se pierde tiempo y qué ajuste de setup lo recupera**.
+Telemetry analysis platform for sim racing. It turns a session's raw data into concrete
+answers: **where time is lost and which setup change wins it back**.
 
-En una vuelta rápida el margen está en las décimas, y esas décimas siempre salen de un dato:
-frenada, trazada, tracción a la salida, reparto de frenos. Delta ingiere la telemetría
-exportada del simulador, la cruza con el setup del auto y produce un informe accionable en
-lugar de un gráfico que hay que interpretar a ojo.
+On a fast lap the margin lives in tenths, and those tenths always come from a number:
+braking point, line, traction on exit, brake bias. Delta ingests the telemetry exported
+from the simulator, cross-references it with the car's setup, and produces an actionable
+report instead of a chart you have to read by eye.
 
-Simuladores soportados: **Assetto Corsa**, **Assetto Corsa Competizione**, **iRacing**,
-**Le Mans Ultimate** y **RaceRoom**.
+Supported simulators: **Assetto Corsa**, **Assetto Corsa Competizione**, **iRacing**,
+**Le Mans Ultimate** and **RaceRoom**.
 
 ---
 
-## Qué hace
+## What it does
 
-- **Ingesta de sesiones** — carga de archivos de telemetría y de setup, con parsers propios
-  para cada formato.
-- **Normalización de pistas** — los simuladores nombran los circuitos de forma distinta;
-  Delta los unifica contra una base de datos interna de pistas.
-- **Análisis de sesión** — comparación entre vueltas, detección de dónde se pierde tiempo
-  y generación de un informe por sesión.
-- **Interpretación asistida por IA** — la API de Anthropic traduce los números a
-  recomendaciones legibles, apoyada en una base de conocimiento del dominio.
-- **Trabajo en equipo** — cuentas de usuario con roles diferenciados de piloto, técnico y
-  administrador, para que un ingeniero de pista pueda revisar las sesiones del piloto.
-- **Procesamiento asíncrono** — los análisis pesados corren en workers de Celery, así que
-  la carga de un archivo grande no bloquea la interfaz.
+- **Session ingestion** — loads telemetry and setup files, with custom parsers for each
+  format.
+- **Track normalization** — simulators name circuits differently; Delta unifies them
+  against an internal track database.
+- **Session analysis** — lap-to-lap comparison, detection of where time is lost, and a
+  generated report per session.
+- **AI-assisted interpretation** — the Anthropic API translates the numbers into readable
+  recommendations, grounded in a domain knowledge base.
+- **Teamwork** — user accounts with separate driver, engineer and administrator roles, so
+  a race engineer can review the driver's sessions.
+- **Asynchronous processing** — heavy analyses run in Celery workers, so uploading a large
+  file doesn't block the interface.
 
-## Arquitectura
+## Architecture
 
 ```
-backend/     API en FastAPI + SQLAlchemy, migraciones con Alembic
+backend/     FastAPI + SQLAlchemy API, migrations with Alembic
   app/api/         auth · upload · sessions · racing_sessions · analysis · teams · billing · admin
   app/services/    parsers · analysis · tracks · knowledge · ai · reports · storage
-  app/tasks/       tareas asíncronas de Celery
-  tests/           100 pruebas con pytest
-frontend/    Next.js + Tailwind (carga, sesiones, comparación, panel técnico y admin)
-nginx/       proxy inverso
+  app/tasks/       asynchronous Celery tasks
+  tests/           100 tests with pytest
+frontend/    Next.js + Tailwind (upload, sessions, comparison, engineer and admin panels)
+nginx/       reverse proxy
 ```
 
 **Stack:** FastAPI · PostgreSQL · SQLAlchemy · Alembic · Celery · Redis · pandas · numpy ·
-API de Anthropic · Next.js · TypeScript · Tailwind · Docker Compose · nginx
+Anthropic API · Next.js · TypeScript · Tailwind · Docker Compose · nginx
 
-## Calidad
+## Quality
 
-El motor de análisis está respaldado por **100 pruebas automatizadas en pytest**, concentradas
-donde un error pasaría inadvertido y corrompería el resultado sin fallar de forma visible:
+The analysis engine is backed by **100 automated pytest tests**, concentrated where an
+error would slip through unnoticed and corrupt the result without failing visibly:
 
-| Suite | Cubre |
+| Suite | Covers |
 | --- | --- |
-| `test_csv_parser` | lectura de telemetría cruda |
-| `test_setup_parser` | interpretación de archivos de setup |
-| `test_track_normalizer` | equivalencia de nombres de pista entre simuladores |
-| `test_pre_analysis` | preparación de datos previa al análisis |
-| `test_session_report` | generación del informe de sesión |
-| `test_kb_service` | base de conocimiento del dominio |
+| `test_csv_parser` | reading raw telemetry |
+| `test_setup_parser` | interpreting setup files |
+| `test_track_normalizer` | track name equivalence across simulators |
+| `test_pre_analysis` | data preparation ahead of the analysis |
+| `test_session_report` | session report generation |
+| `test_kb_service` | the domain knowledge base |
 
 ```bash
 docker compose exec api pytest
 ```
 
-## Puesta en marcha
+## Getting started
 
-Requiere Docker y Docker Compose.
+Requires Docker and Docker Compose.
 
 ```bash
 git clone https://github.com/Inf015/Delta.git
 cd Delta
-cp .env.example .env      # completar las variables antes de levantar
+cp .env.example .env      # fill in the variables before bringing it up
 make up                   # docker compose up -d
-make logs                 # seguir los logs
+make logs                 # follow the logs
 ```
 
-La API queda en `http://localhost:8000` y el frontend en `http://localhost:3000`.
+The API runs at `http://localhost:8000` and the frontend at `http://localhost:3000`.
 
-| Comando | Acción |
+| Command | Action |
 | --- | --- |
-| `make up` | levanta todos los servicios |
-| `make down` | los detiene |
-| `make build` | reconstruye las imágenes |
-| `make logs` | logs de todos los servicios |
-| `make logs-api` | solo la API |
-| `make logs-worker` | solo el worker de Celery |
+| `make up` | brings up all services |
+| `make down` | stops them |
+| `make build` | rebuilds the images |
+| `make logs` | logs from every service |
+| `make logs-api` | the API only |
+| `make logs-worker` | the Celery worker only |
 
-## Estado
+## Status
 
-En desarrollo activo. El núcleo —ingesta, parsers, análisis de sesión y comparación de
-vueltas— está funcionando; el trabajo actual se concentra en ampliar la cobertura de
-formatos y afinar las recomendaciones de setup.
+Under active development. The core — ingestion, parsers, session analysis and lap
+comparison — is working; current work is focused on widening format coverage and sharpening
+the setup recommendations.
 
-## Autor
+## Author
 
-**Oliver Infante** — Ingeniero QA y desarrollador. Sim racing y drag racing con telemetría
-real; Delta nació de querer aplicar a la pista virtual el mismo método de medición que uso
-en el cuarto de milla.
+**Oliver Infante** — QA Engineer and developer. Sim racing and drag racing with real
+telemetry; Delta came out of wanting to apply to the virtual track the same measurement
+method I use in the quarter mile.
 
-[GitHub](https://github.com/Inf015) · [LinkedIn](https://linkedin.com/in/oliver-infante-perez-068226219)
+[Website](https://www.oliver-infante.dev) · [GitHub](https://github.com/Inf015) · [LinkedIn](https://linkedin.com/in/oliver-infante-perez)
