@@ -1,5 +1,7 @@
 # Delta
 
+[![CI](https://github.com/Inf015/Delta/actions/workflows/ci.yml/badge.svg)](https://github.com/Inf015/Delta/actions/workflows/ci.yml)
+
 Telemetry analysis platform for sim racing. It turns a session's raw data into concrete
 answers: **where time is lost and which setup change wins it back**.
 
